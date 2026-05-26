@@ -74,7 +74,7 @@ export class AIService {
             }
 
             const completion = await this.client.chat.completions.create({
-                model: config.aiModel,
+                model: config.chatModel,  // Sonnet — smart chat
                 messages: history,
             });
 
@@ -105,7 +105,7 @@ export class AIService {
 
         try {
             const completion = await this.client.chat.completions.create({
-                model: config.aiModel,
+                model: config.fastModel,  // Haiku — simple extraction task
                 messages: [
                     { role: 'system', content: 'You are a JSON extraction assistant. Only output valid JSON or null.' },
                     { role: 'user', content: prompt },
