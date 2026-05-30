@@ -22,7 +22,7 @@
 ## Directory Structure
 
 ```
-bot-forward-docs/
+edge-book/
 ├── .env                        # Secrets — NEVER commit
 ├── service_account.json        # Google SA key — NEVER commit
 ├── package.json
