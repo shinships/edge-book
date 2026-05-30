@@ -25,14 +25,35 @@ const planService = new PlanService();
 const paymentService = new PaymentService(planService);
 const tradeService = new TradeService();
 
-// Parse a price string that may use a "k" suffix (e.g. "108k" -> 108000)
+// Parse a positive price string that may use a "k" suffix (e.g. "108k" -> 108000).
+// Returns undefined for malformed input (e.g. "1.2.3", ".", "0", negatives).
 function parsePrice(raw?: string): number | undefined {
     if (!raw) return undefined;
-    const m = raw.trim().toLowerCase().match(/^([\d.]+)(k?)$/);
+    const m = raw.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)(k?)$/);
     if (!m) return undefined;
     const value = parseFloat(m[1]);
-    if (isNaN(value)) return undefined;
+    if (!Number.isFinite(value) || value <= 0) return undefined;
     return m[2] === 'k' ? value * 1000 : value;
+}
+
+// Parse a signed percent string like "+3.2%", "-2%" (no "k" suffix allowed).
+function parsePercent(raw?: string): number | undefined {
+    if (!raw) return undefined;
+    const m = raw.trim().match(/^([+-]?\d+(?:\.\d+)?)%$/);
+    if (!m) return undefined;
+    const v = parseFloat(m[1]);
+    return Number.isFinite(v) ? v : undefined;
+}
+
+// Validate a ticker: alphanumerics with one optional . / - separator (e.g. BTC,
+// BRK.B, ETH/USDT, BTC-PERP). Must contain at least one letter (rejects "123").
+function isValidTicker(raw: string): boolean {
+    return /^[A-Za-z0-9]{1,10}(?:[./-][A-Za-z0-9]{1,10})?$/.test(raw) && /[A-Za-z]/.test(raw);
+}
+
+// Format a percent with an explicit sign (e.g. +3.2%, -2%, 0%).
+function fmtPct(n: number): string {
+    return `${n > 0 ? '+' : ''}${n}%`;
 }
 
 // Format a price for display (compact "k" notation for large round-ish numbers)
@@ -361,20 +382,31 @@ bot.on('message:text', async (ctx) => {
     // --- TRADE JOURNAL COMMANDS (Pro) ---
 
     // Trade: Long BTC entry 108k SL 105k TP 115k
-    const tradeOpenMatch = text.match(/^trade:\s*(long|short)\s+([a-z0-9]{2,10})\s+(.+)/i);
-    if (tradeOpenMatch) {
+    if (text.toLowerCase().startsWith('trade:')) {
         if (!planService.canUse(userId, 'canTrade')) {
             await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
             return;
         }
-        const direction = tradeOpenMatch[1].toLowerCase() as 'long' | 'short';
-        const ticker = tradeOpenMatch[2].toUpperCase();
-        const rest = tradeOpenMatch[3];
-        const entry = parsePrice(rest.match(/entry\s*([\d.]+k?)/i)?.[1]);
-        const sl = parsePrice(rest.match(/sl\s*([\d.]+k?)/i)?.[1]);
-        const tp = parsePrice(rest.match(/tp\s*([\d.]+k?)/i)?.[1]);
+        const tradeUsage =
+            '⚠️ Sai cú pháp. Ví dụ: Trade: Long BTC entry 108k SL 105k TP 115k';
+        const m = text.slice(text.indexOf(':') + 1).trim().match(/^(long|short)\s+(\S+)\s+(.+)$/i);
+        if (!m) {
+            await ctx.reply(tradeUsage);
+            return;
+        }
+        const direction = m[1].toLowerCase() as 'long' | 'short';
+        const rawTicker = m[2];
+        if (!isValidTicker(rawTicker)) {
+            await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: BTC, ETH/USDT, BTC-PERP`);
+            return;
+        }
+        const ticker = rawTicker.toUpperCase();
+        const rest = m[3];
+        const entry = parsePrice(rest.match(/entry\s*(\S+)/i)?.[1]);
+        const sl = parsePrice(rest.match(/sl\s*(\S+)/i)?.[1]);
+        const tp = parsePrice(rest.match(/tp\s*(\S+)/i)?.[1]);
         if (entry === undefined) {
-            await ctx.reply('⚠️ Thiếu giá entry. Ví dụ: Trade: Long BTC entry 108k SL 105k TP 115k');
+            await ctx.reply('⚠️ Thiếu hoặc sai giá entry. ' + tradeUsage);
             return;
         }
         const trade = tradeService.openTrade(userId, {
@@ -384,30 +416,59 @@ bot.on('message:text', async (ctx) => {
             stopLoss: sl,
             takeProfit: tp,
         });
+        if (!trade) {
+            await ctx.reply('⚠️ Không thể mở lệnh — giá không hợp lệ.');
+            return;
+        }
         const dirEmoji = direction === 'long' ? '🟢' : '🔴';
+        // Warn on a reversed-logic setup (e.g. long with TP below entry)
+        const reversed =
+            (sl !== undefined && tp !== undefined) &&
+            (direction === 'long' ? !(tp > entry && sl < entry) : !(tp < entry && sl > entry));
         await ctx.reply(
             `${dirEmoji} Đã mở lệnh ${direction.toUpperCase()} ${trade.ticker}\n` +
             `Entry: ${formatPrice(trade.entryPrice)}` +
             (trade.stopLoss !== undefined ? `\nSL: ${formatPrice(trade.stopLoss)}` : '') +
-            (trade.takeProfit !== undefined ? `\nTP: ${formatPrice(trade.takeProfit)}` : '')
+            (trade.takeProfit !== undefined ? `\nTP: ${formatPrice(trade.takeProfit)}` : '') +
+            (reversed ? '\n⚠️ SL/TP ngược chiều với hướng lệnh — sẽ không tính RR.' : '')
         );
         return;
     }
 
     // Close: BTC 112k  |  Close: BTC +3.2%
-    const tradeCloseMatch = text.match(/^close:\s*([a-z0-9]{2,10})\s+([+-]?[\d.]+k?%?)/i);
-    if (tradeCloseMatch) {
+    if (text.toLowerCase().startsWith('close:')) {
         if (!planService.canUse(userId, 'canTrade')) {
             await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
             return;
         }
-        const ticker = tradeCloseMatch[1].toUpperCase();
-        const raw = tradeCloseMatch[2];
+        const closeUsage = '⚠️ Sai cú pháp. Ví dụ: Close: BTC 112k  hoặc  Close: BTC +3.2%';
+        const m = text.slice(text.indexOf(':') + 1).trim().match(/^(\S+)\s+(\S+)$/);
+        if (!m) {
+            await ctx.reply(closeUsage);
+            return;
+        }
+        const rawTicker = m[1];
+        if (!isValidTicker(rawTicker)) {
+            await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ.`);
+            return;
+        }
+        const ticker = rawTicker.toUpperCase();
+        const rawValue = m[2];
         let exit: { price?: number; percent?: number };
-        if (raw.includes('%')) {
-            exit = { percent: parseFloat(raw.replace('%', '')) };
+        if (rawValue.includes('%')) {
+            const percent = parsePercent(rawValue);
+            if (percent === undefined) {
+                await ctx.reply('⚠️ Phần trăm không hợp lệ. ' + closeUsage);
+                return;
+            }
+            exit = { percent };
         } else {
-            exit = { price: parsePrice(raw) };
+            const price = parsePrice(rawValue);
+            if (price === undefined) {
+                await ctx.reply('⚠️ Giá exit không hợp lệ. ' + closeUsage);
+                return;
+            }
+            exit = { price };
         }
         const closed = tradeService.closeTrade(userId, ticker, exit);
         if (!closed) {
@@ -419,7 +480,7 @@ bot.on('message:text', async (ctx) => {
         await ctx.reply(
             `${emoji} Đã đóng ${closed.direction.toUpperCase()} ${closed.ticker}\n` +
             `Entry: ${formatPrice(closed.entryPrice)} → Exit: ${formatPrice(closed.exitPrice!)}\n` +
-            `PnL: ${pnl > 0 ? '+' : ''}${pnl}%`
+            `PnL: ${fmtPct(pnl)}`
         );
         return;
     }
@@ -449,7 +510,7 @@ bot.on('message:text', async (ctx) => {
             closed.forEach((t) => {
                 const pnl = t.pnlPercent ?? 0;
                 const e = pnl > 0 ? '✅' : '❌';
-                msg += `${e} ${t.direction.toUpperCase()} ${t.ticker}: ${pnl > 0 ? '+' : ''}${pnl}%\n`;
+                msg += `${e} ${t.direction.toUpperCase()} ${t.ticker}: ${fmtPct(pnl)}\n`;
             });
         }
         await ctx.reply(msg);
@@ -471,10 +532,10 @@ bot.on('message:text', async (ctx) => {
             '📊 Trade Stats\n\n' +
             `Tổng lệnh: ${s.total} (open ${s.open}, closed ${s.closed})\n` +
             `Win rate: ${s.winRate}% (${s.wins}W / ${s.losses}L)\n` +
-            `Tổng PnL: ${s.totalPnl > 0 ? '+' : ''}${s.totalPnl}%\n` +
+            `Tổng PnL: ${fmtPct(s.totalPnl)}\n` +
             `Avg RR (planned): ${s.avgRR}`;
-        if (s.best) msg += `\nBest: ${s.best.ticker} +${s.best.pnlPercent}%`;
-        if (s.worst) msg += `\nWorst: ${s.worst.ticker} ${s.worst.pnlPercent}%`;
+        if (s.best) msg += `\nBest: ${s.best.ticker} ${fmtPct(s.best.pnlPercent ?? 0)}`;
+        if (s.worst) msg += `\nWorst: ${s.worst.ticker} ${fmtPct(s.worst.pnlPercent ?? 0)}`;
         await ctx.reply(msg);
         return;
     }

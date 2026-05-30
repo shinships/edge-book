@@ -76,7 +76,12 @@ export class TradeService {
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
             }
-            fs.writeFileSync(this.dataPath, JSON.stringify(data, null, 2));
+            // Atomic write: write to a temp file then rename, so a crash mid-write
+            // can't truncate the existing journal. (Does not guard against multiple
+            // concurrent bot instances — that requires a real DB; run one instance.)
+            const tmp = `${this.dataPath}.tmp`;
+            fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+            fs.renameSync(tmp, this.dataPath);
         } catch (error) {
             console.error('Error saving trade data:', error);
         }
@@ -115,7 +120,11 @@ export class TradeService {
             takeProfit?: number;
             notes?: string;
         }
-    ): TradeItem {
+    ): TradeItem | null {
+        // Reject invalid prices to avoid NaN/Infinity poisoning PnL & stats later.
+        if (!Number.isFinite(data.entryPrice) || data.entryPrice <= 0) return null;
+        if (data.stopLoss !== undefined && (!Number.isFinite(data.stopLoss) || data.stopLoss <= 0)) return null;
+        if (data.takeProfit !== undefined && (!Number.isFinite(data.takeProfit) || data.takeProfit <= 0)) return null;
         const items = this.getTrades(userId);
         const trade: TradeItem = {
             id: this.generateId(),
@@ -153,6 +162,7 @@ export class TradeService {
 
         let pnl: number;
         if (typeof exit.percent === 'number') {
+            if (!Number.isFinite(exit.percent)) return null;
             pnl = exit.percent;
             // exitPrice derived from entry + pnl for record-keeping
             trade.exitPrice =
@@ -160,6 +170,7 @@ export class TradeService {
                     ? trade.entryPrice * (1 + pnl / 100)
                     : trade.entryPrice * (1 - pnl / 100);
         } else if (typeof exit.price === 'number') {
+            if (!Number.isFinite(exit.price) || exit.price <= 0) return null;
             trade.exitPrice = exit.price;
             const raw = ((exit.price - trade.entryPrice) / trade.entryPrice) * 100;
             pnl = trade.direction === 'long' ? raw : -raw;
@@ -176,12 +187,23 @@ export class TradeService {
 
     // --- Stats ---
 
-    /** Planned reward/risk from TP/SL relative to entry. Returns null if not computable. */
+    /**
+     * Planned reward/risk from TP/SL relative to entry, direction-aware.
+     * Returns null if TP/SL missing or the setup is reversed-logic
+     * (e.g. a long with TP below entry), so RR isn't computed for invalid setups.
+     */
     private plannedRR(t: TradeItem): number | null {
         if (t.takeProfit === undefined || t.stopLoss === undefined) return null;
-        const reward = Math.abs(t.takeProfit - t.entryPrice);
-        const risk = Math.abs(t.entryPrice - t.stopLoss);
-        if (risk === 0) return null;
+        let reward: number;
+        let risk: number;
+        if (t.direction === 'long') {
+            reward = t.takeProfit - t.entryPrice;
+            risk = t.entryPrice - t.stopLoss;
+        } else {
+            reward = t.entryPrice - t.takeProfit;
+            risk = t.stopLoss - t.entryPrice;
+        }
+        if (reward <= 0 || risk <= 0) return null;
         return reward / risk;
     }
 
