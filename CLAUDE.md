@@ -1,8 +1,11 @@
 # CLAUDE.md — Project Guide for AI Assistants
 
+> **Brand: EdgeBook** — *"capture your edge."* A trading research OS that lives in Telegram.
+> (Formerly "Bot Forward Docs"; npm package `edgebook`.)
+
 ## Project Overview
 
-**Telegram Bot** that acts as a personal AI assistant and **Research OS for traders/investors**. Integrates **AI chat via Vertex-Key.com** (OpenAI-compatible API), **Google Docs** for saving notes/images, **Google Calendar** for scheduling, a local **To-Do list**, and a **smart research management system** with auto-tagging, search, digest, and subscription tiers. Built with **TypeScript**, uses the **grammY** framework for Telegram Bot API.
+**EdgeBook** is a **Telegram Bot** that acts as a personal AI assistant and **Research OS for traders/investors**. Integrates **AI chat via Vertex-Key.com** (OpenAI-compatible API), **Google Docs** for saving notes/images, **Google Calendar** for scheduling, a local **To-Do list**, and a **smart research management system** with auto-tagging, search, digest, and subscription tiers. Built with **TypeScript**, uses the **grammY** framework for Telegram Bot API.
 
 ## Tech Stack
 

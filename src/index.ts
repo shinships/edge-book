@@ -66,10 +66,11 @@ function formatPrice(value: number): string {
 }
 
 // Basic Command Handlers
-bot.command('start', (ctx) => ctx.reply('Hello! I am your AI Assistant & Research OS. How can I help you?'));
+bot.command('start', (ctx) => ctx.reply('👋 Welcome to EdgeBook — capture your edge.\nYour trading research OS, right inside Telegram. How can I help you?'));
 
 bot.command('help', (ctx) => {
     ctx.reply(
+        '📓 EdgeBook — capture your edge.\n\n' +
         'I can help you with:\n' +
         '- Chat & Q&A (AI)\n' +
         '- Personalization: "Call me [Name]", "My job is [Job]"\n' +
@@ -802,7 +803,7 @@ bot.command('upgrade', async (ctx) => {
         : 'Chọn plan muốn nâng cấp:';
 
     await ctx.reply(
-        `💳 Nâng cấp Research OS\n\n${currentTierText}\n\n` +
+        `💳 Nâng cấp EdgeBook\n\n${currentTierText}\n\n` +
         `⭐ Pro ($9.99/tháng):\n• Unlimited forwards\n• Search & Tag\n• Daily Digest\n• Ask AI\n\n` +
         `💎 Premium ($24.99/tháng):\n• Tất cả Pro features\n• Sentiment scoring\n• Export research\n• Unlimited Docs`,
         { reply_markup: keyboard }
@@ -856,8 +857,8 @@ startWebhookServer(paymentService, bot);
 // Start the bot
 bot.start({
     onStart: (botInfo) => {
-        console.log(`Bot @${botInfo.username} started!`);
-        console.log('Research OS features enabled: auto-tag, search, digest, star, stats');
+        console.log(`EdgeBook bot @${botInfo.username} started!`);
+        console.log('EdgeBook features enabled: auto-tag, search, digest, star, stats, trade journal');
         console.log('Payment: /upgrade command enabled' + (config.lsApiKey ? '' : ' (⚠️ LS keys not set)'));
     },
 });

@@ -1,7 +1,7 @@
 {
-    "name": "telegram-gemini-assistant",
+    "name": "edgebook",
     "version": "1.0.0",
-    "description": "Telegram Bot integrated with Google Gemini",
+    "description": "EdgeBook — a trading research OS in Telegram: capture, auto-tag, digest & journal your edge.",
     "main": "dist/index.js",
     "scripts": {
         "start": "node dist/index.js",

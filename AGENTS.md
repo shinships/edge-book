@@ -33,7 +33,7 @@ Trong dự án này, Codex đóng vai trò **reviewer / kiểm thử**, KHÔNG p
 
 ## Bối cảnh dự án (tóm tắt)
 
-Telegram Bot (TypeScript + grammY) làm **Research OS cho trader/investor**: forward → Google Docs, AI chat (Vertex-Key.com), auto-tag ticker, sentiment, search, daily digest, subscription tier (LemonSqueezy).
+**EdgeBook** — Telegram Bot (TypeScript + grammY) làm **Research OS cho trader/investor**: forward → Google Docs, AI chat (Vertex-Key.com), auto-tag ticker, sentiment, search, daily digest, trade journal, subscription tier (LemonSqueezy).
 
 Chi tiết đầy đủ về tech stack, kiến trúc, convention → xem `CLAUDE.md`.
 
