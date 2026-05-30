@@ -1,4 +1,6 @@
-# Bot Forward Docs → Research OS: Chiến lược kiếm tiền cho Trader/Investor
+# EdgeBook (Bot Forward Docs → Research OS): Chiến lược kiếm tiền cho Trader/Investor
+
+> **Brand: EdgeBook** — *"capture your edge."* Trading research OS sống trong Telegram.
 
 ## 1. Tại sao "Research OS" là hướng đi đúng?
 
