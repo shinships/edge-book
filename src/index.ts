@@ -8,6 +8,7 @@ import { ShopeeService } from './services/shopee.service';
 import { ResearchService } from './services/research.service';
 import { PlanService } from './services/plan.service';
 import { PaymentService } from './services/payment.service';
+import { TradeService } from './services/trade.service';
 import { startWebhookServer } from './webhook.server';
 import fs from 'fs';
 import https from 'https';
@@ -22,6 +23,26 @@ const shopeeService = new ShopeeService(bot);
 const researchService = new ResearchService();
 const planService = new PlanService();
 const paymentService = new PaymentService(planService);
+const tradeService = new TradeService();
+
+// Parse a price string that may use a "k" suffix (e.g. "108k" -> 108000)
+function parsePrice(raw?: string): number | undefined {
+    if (!raw) return undefined;
+    const m = raw.trim().toLowerCase().match(/^([\d.]+)(k?)$/);
+    if (!m) return undefined;
+    const value = parseFloat(m[1]);
+    if (isNaN(value)) return undefined;
+    return m[2] === 'k' ? value * 1000 : value;
+}
+
+// Format a price for display (compact "k" notation for large round-ish numbers)
+function formatPrice(value: number): string {
+    if (value >= 1000) {
+        const k = value / 1000;
+        return `${Number.isInteger(k) ? k : k.toFixed(2).replace(/\.?0+$/, '')}k`;
+    }
+    return `${value}`;
+}
 
 // Basic Command Handlers
 bot.command('start', (ctx) => ctx.reply('Hello! I am your AI Assistant & Research OS. How can I help you?'));
@@ -55,6 +76,11 @@ bot.command('help', (ctx) => {
         '  + "Starred" — xem bookmarks\n' +
         '  + "Ask: <question>" — hỏi AI về research\n' +
         '  + "/plan" — xem plan hiện tại\n' +
+        '\n📈 Trade Journal (Pro):\n' +
+        '  + "Trade: Long BTC entry 108k SL 105k TP 115k" — mở lệnh\n' +
+        '  + "Close: BTC 112k" hoặc "Close: BTC +3.2%" — đóng lệnh\n' +
+        '  + "Trades" — xem nhật ký giao dịch\n' +
+        '  + "Trade Stats" — thống kê win rate, PnL, RR\n' +
         '\n💳 Subscription:\n' +
         '  + "/upgrade" — nâng cấp lên Pro/Premium'
     );
@@ -331,6 +357,129 @@ bot.on('message:text', async (ctx) => {
     }
 
     // --- END RESEARCH OS COMMANDS ---
+
+    // --- TRADE JOURNAL COMMANDS (Pro) ---
+
+    // Trade: Long BTC entry 108k SL 105k TP 115k
+    const tradeOpenMatch = text.match(/^trade:\s*(long|short)\s+([a-z0-9]{2,10})\s+(.+)/i);
+    if (tradeOpenMatch) {
+        if (!planService.canUse(userId, 'canTrade')) {
+            await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
+            return;
+        }
+        const direction = tradeOpenMatch[1].toLowerCase() as 'long' | 'short';
+        const ticker = tradeOpenMatch[2].toUpperCase();
+        const rest = tradeOpenMatch[3];
+        const entry = parsePrice(rest.match(/entry\s*([\d.]+k?)/i)?.[1]);
+        const sl = parsePrice(rest.match(/sl\s*([\d.]+k?)/i)?.[1]);
+        const tp = parsePrice(rest.match(/tp\s*([\d.]+k?)/i)?.[1]);
+        if (entry === undefined) {
+            await ctx.reply('⚠️ Thiếu giá entry. Ví dụ: Trade: Long BTC entry 108k SL 105k TP 115k');
+            return;
+        }
+        const trade = tradeService.openTrade(userId, {
+            ticker,
+            direction,
+            entryPrice: entry,
+            stopLoss: sl,
+            takeProfit: tp,
+        });
+        const dirEmoji = direction === 'long' ? '🟢' : '🔴';
+        await ctx.reply(
+            `${dirEmoji} Đã mở lệnh ${direction.toUpperCase()} ${trade.ticker}\n` +
+            `Entry: ${formatPrice(trade.entryPrice)}` +
+            (trade.stopLoss !== undefined ? `\nSL: ${formatPrice(trade.stopLoss)}` : '') +
+            (trade.takeProfit !== undefined ? `\nTP: ${formatPrice(trade.takeProfit)}` : '')
+        );
+        return;
+    }
+
+    // Close: BTC 112k  |  Close: BTC +3.2%
+    const tradeCloseMatch = text.match(/^close:\s*([a-z0-9]{2,10})\s+([+-]?[\d.]+k?%?)/i);
+    if (tradeCloseMatch) {
+        if (!planService.canUse(userId, 'canTrade')) {
+            await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
+            return;
+        }
+        const ticker = tradeCloseMatch[1].toUpperCase();
+        const raw = tradeCloseMatch[2];
+        let exit: { price?: number; percent?: number };
+        if (raw.includes('%')) {
+            exit = { percent: parseFloat(raw.replace('%', '')) };
+        } else {
+            exit = { price: parsePrice(raw) };
+        }
+        const closed = tradeService.closeTrade(userId, ticker, exit);
+        if (!closed) {
+            await ctx.reply(`⚠️ Không tìm thấy lệnh open nào cho ${ticker}.`);
+            return;
+        }
+        const pnl = closed.pnlPercent ?? 0;
+        const emoji = pnl > 0 ? '✅' : '❌';
+        await ctx.reply(
+            `${emoji} Đã đóng ${closed.direction.toUpperCase()} ${closed.ticker}\n` +
+            `Entry: ${formatPrice(closed.entryPrice)} → Exit: ${formatPrice(closed.exitPrice!)}\n` +
+            `PnL: ${pnl > 0 ? '+' : ''}${pnl}%`
+        );
+        return;
+    }
+
+    // Trades / My Trades
+    if (text.toLowerCase() === 'trades' || text.toLowerCase() === 'my trades') {
+        if (!planService.canUse(userId, 'canTrade')) {
+            await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
+            return;
+        }
+        const open = tradeService.getOpenTrades(userId);
+        const closed = tradeService.getClosedTrades(userId).slice(-5).reverse();
+        if (open.length === 0 && closed.length === 0) {
+            await ctx.reply('📒 Chưa có lệnh nào. Mở lệnh: Trade: Long BTC entry 108k SL 105k TP 115k');
+            return;
+        }
+        let msg = '📒 Trade Journal\n';
+        if (open.length > 0) {
+            msg += '\n🔵 Open:\n';
+            open.forEach((t) => {
+                const e = t.direction === 'long' ? '🟢' : '🔴';
+                msg += `${e} ${t.direction.toUpperCase()} ${t.ticker} @ ${formatPrice(t.entryPrice)}\n`;
+            });
+        }
+        if (closed.length > 0) {
+            msg += '\n⚪ Closed (gần đây):\n';
+            closed.forEach((t) => {
+                const pnl = t.pnlPercent ?? 0;
+                const e = pnl > 0 ? '✅' : '❌';
+                msg += `${e} ${t.direction.toUpperCase()} ${t.ticker}: ${pnl > 0 ? '+' : ''}${pnl}%\n`;
+            });
+        }
+        await ctx.reply(msg);
+        return;
+    }
+
+    // Trade Stats
+    if (text.toLowerCase() === 'trade stats') {
+        if (!planService.canUse(userId, 'canTrade')) {
+            await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
+            return;
+        }
+        const s = tradeService.getStats(userId);
+        if (s.closed === 0) {
+            await ctx.reply('📊 Chưa có lệnh đã đóng nào để thống kê.');
+            return;
+        }
+        let msg =
+            '📊 Trade Stats\n\n' +
+            `Tổng lệnh: ${s.total} (open ${s.open}, closed ${s.closed})\n` +
+            `Win rate: ${s.winRate}% (${s.wins}W / ${s.losses}L)\n` +
+            `Tổng PnL: ${s.totalPnl > 0 ? '+' : ''}${s.totalPnl}%\n` +
+            `Avg RR (planned): ${s.avgRR}`;
+        if (s.best) msg += `\nBest: ${s.best.ticker} +${s.best.pnlPercent}%`;
+        if (s.worst) msg += `\nWorst: ${s.worst.ticker} ${s.worst.pnlPercent}%`;
+        await ctx.reply(msg);
+        return;
+    }
+
+    // --- END TRADE JOURNAL COMMANDS ---
 
     // 1. Check if user wants to schedule something
     if (text.toLowerCase().includes('schedule') || text.toLowerCase().includes('meeting') || text.toLowerCase().includes('remind')) {

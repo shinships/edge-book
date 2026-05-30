@@ -118,13 +118,14 @@ Sentiment: 🟡 Neutral (5/10)
 
 ### Phase 3: Trade Journal & Portfolio (6-8 tuần)
 
-| Feature | Mô tả | Monetizable? |
-|---|---|---|
-| **Trade log** | `Trade: Long BTC $108k, SL $105k, TP $115k` | ✅ Pro |
-| **PnL tracking** | `Close: BTC +3.2%` → tự tính PnL | ✅ Pro |
-| **Research-to-trade link** | Khi close trade, AI hỏi "Link tới research nào?" | ✅ Premium |
-| **Performance analytics** | Win rate, avg RR, best/worst trades | ✅ Premium |
-| **Export PDF report** | Monthly trade report với charts | ✅ Premium |
+| Feature | Mô tả | Monetizable? | Status |
+|---|---|---|---|
+| **Trade log** | `Trade: Long BTC entry 108k SL 105k TP 115k` | ✅ Pro | ✅ Sprint 3 DONE |
+| **PnL tracking** | `Close: BTC 112k` hoặc `Close: BTC +3.2%` → tự tính PnL | ✅ Pro | ✅ Sprint 3 DONE |
+| **Trade stats cơ bản** | `Trade Stats` — win rate, total PnL, avg RR, best/worst | ✅ Pro | ✅ Sprint 3 DONE |
+| **Research-to-trade link** | Khi close trade, AI hỏi "Link tới research nào?" | ✅ Premium | ⏳ |
+| **Performance analytics nâng cao** | Breakdown theo ticker/thời gian, AI insight | ✅ Premium | ⏳ |
+| **Export PDF report** | Monthly trade report với charts | ✅ Premium | ⏳ |
 
 ### Phase 4: Team & API (8-12 tuần)
 

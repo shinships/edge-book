@@ -31,7 +31,8 @@ bot-forward-docs/
 │   ├── users.json              # Persisted user profiles & doc aliases
 │   ├── todos.json              # Persisted to-do items (created at runtime)
 │   ├── research.json           # Research items with tags, sentiment (created at runtime)
-│   └── plans.json              # User subscription plans (created at runtime)
+│   ├── plans.json              # User subscription plans (created at runtime)
+│   └── trades.json             # Trade Journal entries per user (created at runtime)
 ├── src/
 │   ├── config.ts               # Loads env vars, validates required keys
 │   ├── index.ts                # Entry point — bot commands, message handlers, cron jobs
@@ -44,6 +45,7 @@ bot-forward-docs/
 │   │   ├── research.service.ts # Research items: auto-tagging, search, star, digest data
 │   │   ├── shopee.service.ts   # Shopee price tracker & flash sale notifier
 │   │   ├── todo.service.ts     # File-based to-do CRUD per user
+│   │   ├── trade.service.ts    # Trade Journal: open/close trades, PnL calc, stats (Pro)
 │   │   └── user.service.ts     # File-based user profile management & doc aliases
 │   ├── utils/                  # (empty — reserved for future utilities)
 │   ├── test-ai.ts              # Manual test: verify Vertex-Key API connection
@@ -116,10 +118,15 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
    - `Star` / `⭐` — bookmark the most recent research item
    - `Ask: <question>` — AI answers questions about your saved research (Pro)
    - `/plan` / `My Plan` — view current subscription plan and limits
-4. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
-5. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
-6. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc
-7. **Default**: Falls through to AI chat with per-user session
+4. **Trade Journal commands** (new, Pro):
+   - `Trade: <Long|Short> <ticker> entry <price> SL <price> TP <price>` — open a trade (regex-parsed, `k` suffix supported)
+   - `Close: <ticker> <price>` or `Close: <ticker> +3.2%` — close most-recent open trade, auto-computes PnL%
+   - `Trades` / `My Trades` — list open + recent closed trades
+   - `Trade Stats` — win rate, total PnL, avg planned RR, best/worst
+5. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
+6. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
+7. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc
+8. **Default**: Falls through to AI chat with per-user session
 
 ### Photo Handler
 
@@ -137,6 +144,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 - **PlanService** *(new)*: File-based persistence to `data/plans.json`. Manages subscription tiers (free/pro/premium), daily forward rate limiting, feature gating, and plan expiration.
 - **UserService**: File-based persistence to `data/users.json`. Supports multi-doc aliases (e.g., `work` → `<docId>`). Auto-sets first added doc as active.
 - **TodoService**: File-based persistence to `data/todos.json`. Supports completion by index (1-based) or keyword search.
+- **TradeService** *(new)*: File-based persistence to `data/trades.json`. Manages the Trade Journal — open/close trades, auto-computes PnL% (price- or percent-based, direction-aware), and aggregates stats (win rate, total PnL, avg planned RR, best/worst). Pro-gated via `canTrade`.
 
 ### Subscription Tiers
 
@@ -145,6 +153,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 | Forwards/day | 10 | Unlimited | Unlimited |
 | Search & Tag | ❌ | ✅ | ✅ |
 | Daily Digest | ❌ | ✅ | ✅ |
+| Trade Journal | ❌ | ✅ | ✅ |
 | Star/Bookmark | ✅ | ✅ | ✅ |
 | Sentiment | ❌ | ❌ | ✅ |
 | Export | ❌ | ❌ | ✅ |
