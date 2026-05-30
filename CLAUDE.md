@@ -174,6 +174,21 @@ All data is stored as JSON files in `data/`. Read on service init, written synch
 - Dùng feature branch (e.g., `sprint-2a-payment`) khi làm sprint lớn, sau đó merge trực tiếp vào `main` sau khi build pass.
 - Không cần code review hay PR approval.
 
+### Phân vai Claude Code / Codex
+
+Dự án dùng hai AI agent với vai trò tách biệt:
+
+| Agent | Vai trò | File hướng dẫn |
+| ----- | ------- | -------------- |
+| **Claude Code** | **Implementer** — viết feature mới, command mới, service mới, tích hợp API, refactor lớn, thay đổi kiến trúc. | `CLAUDE.md` (file này) |
+| **Codex** | **Reviewer** — review code, chỉ ra bug/edge case/lỗi bảo mật, đề xuất cải tiến, sửa lỗi nhỏ (typo/type), viết test. **KHÔNG viết feature mới.** | `AGENTS.md` |
+
+**Nguyên tắc:**
+- **Claude Code** chủ động build; sau khi xong, nhờ **Codex** review trước khi merge vào `main`.
+- **Codex** chỉ đề xuất với thay đổi lớn — quyết định implement thuộc về Claude Code / người dùng.
+- Khi cần thêm feature → giao Claude Code. Khi cần soát chất lượng → giao Codex.
+- Chi tiết ràng buộc vai trò Codex → xem `AGENTS.md`.
+
 ### Other Conventions
 
 - **Language**: Bot responses mix English and Vietnamese (error messages in Vietnamese in `ai.service.ts`).
