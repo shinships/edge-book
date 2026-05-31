@@ -10,6 +10,7 @@ import { PlanService } from './services/plan.service';
 import { PaymentService } from './services/payment.service';
 import { TradeService } from './services/trade.service';
 import { ReportService } from './services/report.service';
+import { ThesisService, ThesisItem } from './services/thesis.service';
 import { startWebhookServer } from './webhook.server';
 import fs from 'fs';
 import https from 'https';
@@ -26,6 +27,7 @@ const planService = new PlanService();
 const paymentService = new PaymentService(planService);
 const tradeService = new TradeService();
 const reportService = new ReportService();
+const thesisService = new ThesisService();
 
 // Parse a positive price string that may use a "k" suffix (e.g. "108k" -> 108000).
 // Returns undefined for malformed input (e.g. "1.2.3", ".", "0", negatives).
@@ -135,6 +137,8 @@ bot.command('help', (ctx) => {
         '  + "Stats" — thống kê research\n' +
         '  + "Starred" — xem bookmarks\n' +
         '  + "Ask: <question>" — hỏi AI về research\n' +
+        '  + "Thesis: <ticker> <bullish|bearish> <luận điểm>" (Premium) — ghi thesis, nhắc khi có tin mâu thuẫn\n' +
+        '  + "Theses" / "Close Thesis: <số>" — xem/đóng thesis\n' +
         '  + "/plan" — xem plan hiện tại\n' +
         '\n📈 Trade Journal (Pro):\n' +
         '  + "Trade: Long BTC entry 108k SL 105k TP 115k" — mở lệnh\n' +
@@ -434,6 +438,77 @@ bot.on('message:text', async (ctx) => {
     if (text.toLowerCase() === '/plan' || text.toLowerCase() === 'my plan') {
         const info = planService.getPlanInfo(userId);
         await ctx.reply(info);
+        return;
+    }
+
+    // "Close Thesis: <index|ticker>" — close an active thesis (Premium)
+    if (text.toLowerCase().startsWith('close thesis:')) {
+        if (!planService.canUse(userId, 'canThesis')) {
+            await ctx.reply('🔒 Thesis Tracker là tính năng Premium. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const selector = text.slice(text.indexOf(':') + 1).trim();
+        if (!selector) {
+            await ctx.reply('⚠️ Cú pháp: Close Thesis: <số thứ tự hoặc ticker>. Gõ "Theses" để xem danh sách.');
+            return;
+        }
+        const closed = thesisService.closeThesis(userId, selector);
+        if (!closed) {
+            await ctx.reply(`⚠️ Không tìm thấy thesis "${selector}". Gõ "Theses" để xem danh sách.`);
+            return;
+        }
+        const e = closed.stance === 'bullish' ? '📈' : '📉';
+        await ctx.reply(`✅ Đã đóng thesis ${e} ${closed.ticker} (${closed.stance}).`);
+        return;
+    }
+
+    // "Thesis: <ticker> <bullish|bearish> <text>" — record a thesis (Premium)
+    if (text.toLowerCase().startsWith('thesis:')) {
+        if (!planService.canUse(userId, 'canThesis')) {
+            await ctx.reply('🔒 Thesis Tracker là tính năng Premium. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const usage = '⚠️ Cú pháp: Thesis: <ticker> <bullish|bearish> <luận điểm>\nVí dụ: Thesis: BTC bullish 150k EOY, S2F on track';
+        const m = text.slice(text.indexOf(':') + 1).trim().match(/^(\S+)\s+(bullish|bearish|long|short)\s+(.+)$/i);
+        if (!m) {
+            await ctx.reply(usage);
+            return;
+        }
+        const rawTicker = m[1];
+        if (!isValidTicker(rawTicker)) {
+            await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: BTC, ETH, SOL`);
+            return;
+        }
+        const word = m[2].toLowerCase();
+        const stance: 'bullish' | 'bearish' = (word === 'bullish' || word === 'long') ? 'bullish' : 'bearish';
+        const thesis = thesisService.addThesis(userId, rawTicker, stance, m[3]);
+        const e = stance === 'bullish' ? '📈' : '📉';
+        await ctx.reply(
+            `${e} Đã ghi thesis ${thesis.ticker} (${stance}):\n"${thesis.text}"\n\n` +
+            `🔔 Mình sẽ nhắc khi có research mâu thuẫn với luận điểm này.`
+        );
+        return;
+    }
+
+    // "Theses" / "My Theses" — list active theses (Premium)
+    if (text.toLowerCase() === 'theses' || text.toLowerCase() === 'my theses') {
+        if (!planService.canUse(userId, 'canThesis')) {
+            await ctx.reply('🔒 Thesis Tracker là tính năng Premium. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const active = thesisService.getActiveTheses(userId);
+        if (active.length === 0) {
+            await ctx.reply('📋 Chưa có thesis nào. Ghi mới: Thesis: BTC bullish 150k EOY');
+            return;
+        }
+        let msg = '📋 Theses đang theo dõi:\n';
+        active.forEach((t, i) => {
+            const e = t.stance === 'bullish' ? '📈' : '📉';
+            const conflict = t.conflictCount > 0 ? ` ⚠️${t.conflictCount}` : '';
+            msg += `\n${i + 1}. ${e} ${t.ticker} (${t.stance})${conflict}\n   "${t.text}"`;
+        });
+        msg += '\n\n💡 Đóng thesis: Close Thesis: <số thứ tự>';
+        await ctx.reply(msg);
         return;
     }
 
@@ -796,6 +871,28 @@ bot.on('message:text', async (ctx) => {
         const researchItem = researchService.addItem(userId, content, forwardFrom);
         planService.incrementForwardCount(userId);
 
+        // --- Thesis conflict detection (Premium): alert if new research contradicts an active thesis ---
+        let thesisAlert = '';
+        if (planService.canUse(userId, 'canThesis') && researchItem.sentiment !== 0) {
+            const conflicts: ThesisItem[] = [];
+            const seen = new Set<string>();
+            for (const ticker of researchItem.tickers) {
+                for (const t of thesisService.findConflicts(userId, ticker, researchItem.sentiment)) {
+                    if (!seen.has(t.id)) { seen.add(t.id); conflicts.push(t); }
+                }
+            }
+            if (conflicts.length > 0) {
+                const sEmoji = researchItem.sentiment < 0 ? '🔴' : '🟢';
+                const sVal = `${researchItem.sentiment > 0 ? '+' : ''}${researchItem.sentiment.toFixed(2)}`;
+                thesisAlert = '⚠️ Thesis mâu thuẫn!\n' +
+                    conflicts.map((t) => {
+                        const e = t.stance === 'bullish' ? '📈' : '📉';
+                        return `${e} ${t.ticker} (${t.stance}): "${t.text}"`;
+                    }).join('\n') +
+                    `\n\nTin vừa lưu ${sEmoji} sentiment ${sVal} — ngược hướng thesis. Xem lại? Gõ "Theses".`;
+            }
+        }
+
         // Build tag info for reply
         const tagInfo = researchItem.tickers.length > 0
             ? `\n🏷️ Tags: ${researchItem.tickers.join(', ')}`
@@ -834,6 +931,11 @@ bot.on('message:text', async (ctx) => {
         const remaining = planService.canForward(userId);
         if (remaining.limit !== -1 && remaining.remaining <= 3 && remaining.remaining > 0) {
             await ctx.reply(`⚡ Còn ${remaining.remaining}/${remaining.limit} forwards hôm nay.`);
+        }
+
+        // Surface a thesis-conflict alert (if any) as a separate, prominent message.
+        if (thesisAlert) {
+            await ctx.reply(thesisAlert);
         }
 
         return;

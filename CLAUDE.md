@@ -49,6 +49,7 @@ edge-book/
 │   │   ├── report.service.ts   # PDF trade report generation via pdfkit (Premium export)
 │   │   ├── research.service.ts # Research items: auto-tagging, search, star, digest data
 │   │   ├── shopee.service.ts   # Shopee price tracker & flash sale notifier
+│   │   ├── thesis.service.ts   # Thesis tracker: record theses + conflict detection vs research sentiment (Premium)
 │   │   ├── todo.service.ts     # File-based to-do CRUD per user
 │   │   ├── trade.service.ts    # Trade Journal: open/close trades, PnL calc, stats, analytics (Pro/Premium)
 │   │   └── user.service.ts     # File-based user profile management & doc aliases
@@ -123,6 +124,8 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
    - `Starred` / `Bookmarks` — view bookmarked items
    - `Star` / `⭐` — bookmark the most recent research item
    - `Ask: <question>` — AI answers questions about your saved research (Pro)
+   - `Thesis: <ticker> <bullish|bearish> <text>` — record a thesis (Premium); the bot alerts when newly-saved research contradicts it (rule-based sentiment vs stance, 0.2 threshold)
+   - `Theses` / `My Theses` — list active theses (shows ⚠️N conflict count); `Close Thesis: <index|ticker>` — close one
    - `/plan` / `My Plan` — view current subscription plan and limits
 4. **Trade Journal commands** (new, Pro):
    - `Trade: <Long|Short> <ticker> entry <price> SL <price> TP <price>` — open a trade (regex-parsed, `k` suffix supported)
@@ -153,6 +156,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 - **UserService**: File-based persistence to `data/users.json`. Supports multi-doc aliases (e.g., `work` → `<docId>`). Auto-sets first added doc as active.
 - **TodoService**: File-based persistence to `data/todos.json`. Supports completion by index (1-based) or keyword search.
 - **TradeService** *(new)*: File-based persistence to `data/trades.json`. Manages the Trade Journal — open/close trades, auto-computes PnL% (price- or percent-based, direction-aware), and aggregates stats (win rate, total PnL, avg planned RR, best/worst). Pro-gated via `canTrade`. Also supports **research-to-trade link** (`linkResearch`/`getTradeById`, `linkedResearch: string[]` on each trade) — Premium-gated via `canLinkResearch`. On `Close:`, Premium users get an inline keyboard of recent research matching the ticker (callback `linkres:<tradeId>:<researchId>`); the `Trades` list shows a 🔗N tag for trades with links. Also provides **advanced analytics** (`getAnalytics` → breakdown by ticker/direction/month + avg hold duration over closed trades) — Premium-gated via `canAnalytics`, surfaced by the `Trade Analytics` command with an AI insight from `AIService.generateTradeInsight`.
+- **ThesisService** *(new)*: File-based persistence to `data/theses.json`. Records per-user theses (`ticker`, `stance` bullish/bearish, `text`) and detects contradictions: `findConflicts(userId, ticker, sentiment)` returns active theses whose stance is clearly opposed to a newly-saved research item's sentiment (±0.2 threshold) and bumps their `conflictCount`. Wired into the Save/forward flow in `index.ts`; Premium-gated via `canThesis`. Detection is rule-based (no AI call on the save hot path).
 - **ReportService** *(new)*: Generates a trade performance **PDF** with `pdfkit` (in-memory `Buffer`, sent via grammY `InputFile`). Renders a header banner, summary, a drawn monthly-PnL bar chart, by-ticker/by-direction tables, and a closed-trade log with multi-page support (`bufferPages: true` for the footer pass). PDF text is **ASCII/English** — pdfkit's built-in fonts can't render Vietnamese diacritics, so `index.ts` runs the trader name through a `toAscii()` helper. Premium-gated via `canExport`.
 
 ### Subscription Tiers
@@ -165,6 +169,8 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 | Trade Journal | ❌ | ✅ | ✅ |
 | Research↔Trade link | ❌ | ❌ | ✅ |
 | Perf Analytics | ❌ | ❌ | ✅ |
+| Weekly Report | ❌ | ✅ | ✅ |
+| Thesis Tracker | ❌ | ❌ | ✅ |
 | Star/Bookmark | ✅ | ✅ | ✅ |
 | Sentiment | ❌ | ❌ | ✅ |
 | Export | ❌ | ❌ | ✅ |
