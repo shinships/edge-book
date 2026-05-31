@@ -8,7 +8,7 @@
 |---|---|
 | **Brand** | ✅ Rebrand "Bot Forward Docs" → **EdgeBook** (repo `shincapitals/edge-book`, npm `edgebook`, bot `@edgebook_bot`) |
 | **Tầng 1 — Capture Engine** | ✅ Done (forward → Docs, AI chat, Calendar, To-Do, Shopee) |
-| **Tầng 2 — Research Hub** | ✅ Done Sprint 1 (auto-tag, search, sentiment, daily digest, Ask AI) + Weekly Report (Sprint 5: top tickers, sentiment shift, AI insights — Pro) |
+| **Tầng 2 — Research Hub** | ✅ **Hoàn tất 100%** — Sprint 1 (auto-tag, search, sentiment, daily digest, Ask AI) + Weekly Report (Sprint 5 — Pro) + Thesis tracker (Sprint 6 — Premium) |
 | **Tầng 3 — Trade Journal MVP** | ✅ Done Sprint 3 (log/close/PnL/stats — Pro) |
 | **Research-to-trade link** | ✅ Done Sprint 4 (close lệnh → gợi ý research khớp ticker để link 🔗 — Premium) |
 | **Performance analytics nâng cao** | ✅ Done Sprint 4 (`Trade Analytics`: breakdown ticker/hướng/tháng + avg hold + AI insight — Premium) |
@@ -119,7 +119,7 @@ Bot tự động:
 | **Daily Digest** | 8:00 sáng gửi summary tất cả research hôm qua, group theo ticker | ✅ Pro |
 | **Weekly Report** | Cuối tuần gửi report: top tickers, sentiment shift, key insights | ✅ Pro (✅ Sprint 5 DONE — cmd `Weekly Report` + cron CN 18:00) |
 | **Ask about research** | `Ask: What did I save about BTC this week?` → AI trả lời từ saved data | ✅ Pro |
-| **Thesis tracker** | Ghi thesis → AI nhắc khi có data mâu thuẫn | ✅ Premium |
+| **Thesis tracker** | Ghi thesis → nhắc khi có data mâu thuẫn (rule-based sentiment) | ✅ Premium (✅ Sprint 6 DONE — `Thesis:` / `Theses` / `Close Thesis:`) |
 | **Sentiment scoring** | AI score sentiment (bullish/bearish/neutral) mỗi forwarded message | ✅ Premium |
 
 #### Ví dụ Daily Digest:
