@@ -24,6 +24,7 @@ export interface PlanLimits {
     canSentiment: boolean;
     canExport: boolean;
     canTrade: boolean;          // Trade Journal (Pro+)
+    canLinkResearch: boolean;   // Research-to-trade link (Premium)
     maxDocs: number;            // -1 = unlimited
 }
 
@@ -36,6 +37,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canSentiment: false,
         canExport: false,
         canTrade: false,
+        canLinkResearch: false,
         maxDocs: 1,
     },
     pro: {
@@ -46,6 +48,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canSentiment: false,
         canExport: false,
         canTrade: true,
+        canLinkResearch: false,
         maxDocs: 5,
     },
     premium: {
@@ -56,6 +59,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canSentiment: true,
         canExport: true,
         canTrade: true,
+        canLinkResearch: true,
         maxDocs: -1,
     },
 };

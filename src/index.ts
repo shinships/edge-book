@@ -65,6 +65,12 @@ function formatPrice(value: number): string {
     return `${value}`;
 }
 
+// Build a short, single-line preview label for a research item (for inline buttons).
+function researchLabel(content: string, max = 40): string {
+    const oneLine = content.replace(/\s+/g, ' ').trim();
+    return oneLine.length > max ? oneLine.slice(0, max - 1) + '…' : oneLine;
+}
+
 // Basic Command Handlers
 bot.command('start', (ctx) => ctx.reply('👋 Welcome to EdgeBook — capture your edge.\nYour trading research OS, right inside Telegram. How can I help you?'));
 
@@ -103,6 +109,7 @@ bot.command('help', (ctx) => {
         '  + "Close: BTC 112k" hoặc "Close: BTC +3.2%" — đóng lệnh\n' +
         '  + "Trades" — xem nhật ký giao dịch\n' +
         '  + "Trade Stats" — thống kê win rate, PnL, RR\n' +
+        '  + Khi đóng lệnh (Premium): chọn research để link 🔗\n' +
         '\n💳 Subscription:\n' +
         '  + "/upgrade" — nâng cấp lên Pro/Premium'
     );
@@ -483,6 +490,30 @@ bot.on('message:text', async (ctx) => {
             `Entry: ${formatPrice(closed.entryPrice)} → Exit: ${formatPrice(closed.exitPrice!)}\n` +
             `PnL: ${fmtPct(pnl)}`
         );
+
+        // Research-to-trade link (Premium): offer to link recent research on this ticker.
+        if (planService.canUse(userId, 'canLinkResearch')) {
+            // Prefer items matching the ticker; fall back to the most recent research.
+            const alreadyLinked = new Set(closed.linkedResearch ?? []);
+            let candidates = researchService
+                .searchByTicker(userId, closed.ticker)
+                .filter((r) => !alreadyLinked.has(r.id));
+            if (candidates.length === 0) {
+                candidates = researchService
+                    .getRecentItems(userId, 24 * 7)
+                    .filter((r) => !alreadyLinked.has(r.id));
+            }
+            // Most recent first, cap at 5 to keep the keyboard tidy.
+            candidates = candidates.slice(-5).reverse();
+            if (candidates.length > 0) {
+                const keyboard = new InlineKeyboard();
+                candidates.forEach((r) => {
+                    keyboard.text(`🔗 ${researchLabel(r.content)}`, `linkres:${closed.id}:${r.id}`).row();
+                });
+                keyboard.text('Bỏ qua', `linkres_skip:${closed.id}`);
+                await ctx.reply('🔗 Link lệnh này tới research nào?', { reply_markup: keyboard });
+            }
+        }
         return;
     }
 
@@ -499,11 +530,15 @@ bot.on('message:text', async (ctx) => {
             return;
         }
         let msg = '📒 Trade Journal\n';
+        const linkTag = (t: typeof open[number]) => {
+            const n = t.linkedResearch?.length ?? 0;
+            return n > 0 ? ` 🔗${n}` : '';
+        };
         if (open.length > 0) {
             msg += '\n🔵 Open:\n';
             open.forEach((t) => {
                 const e = t.direction === 'long' ? '🟢' : '🔴';
-                msg += `${e} ${t.direction.toUpperCase()} ${t.ticker} @ ${formatPrice(t.entryPrice)}\n`;
+                msg += `${e} ${t.direction.toUpperCase()} ${t.ticker} @ ${formatPrice(t.entryPrice)}${linkTag(t)}\n`;
             });
         }
         if (closed.length > 0) {
@@ -511,7 +546,7 @@ bot.on('message:text', async (ctx) => {
             closed.forEach((t) => {
                 const pnl = t.pnlPercent ?? 0;
                 const e = pnl > 0 ? '✅' : '❌';
-                msg += `${e} ${t.direction.toUpperCase()} ${t.ticker}: ${fmtPct(pnl)}\n`;
+                msg += `${e} ${t.direction.toUpperCase()} ${t.ticker}: ${fmtPct(pnl)}${linkTag(t)}\n`;
             });
         }
         await ctx.reply(msg);
@@ -849,6 +884,41 @@ bot.callbackQuery('upgrade_premium', async (ctx) => {
         `⏰ Link có hiệu lực trong 30 phút.\n` +
         `Sau khi thanh toán, plan sẽ tự động cập nhật! 🚀`
     );
+});
+
+// Research-to-trade link callbacks (Premium)
+bot.callbackQuery(/^linkres:([^:]+):([^:]+)$/, async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) {
+        await ctx.answerCallbackQuery();
+        return;
+    }
+    if (!planService.canUse(userId, 'canLinkResearch')) {
+        await ctx.answerCallbackQuery({ text: '🔒 Tính năng Premium', show_alert: true });
+        return;
+    }
+    const tradeId = ctx.match![1];
+    const researchId = ctx.match![2];
+
+    // Validate BOTH records exist before mutating, so a stale callback can't
+    // persist a dangling research id (which would show a phantom 🔗 count).
+    const research = researchService.getItemById(userId, researchId);
+    if (!research || !tradeService.getTradeById(userId, tradeId)) {
+        await ctx.answerCallbackQuery({ text: '⚠️ Không tìm thấy lệnh hoặc research', show_alert: true });
+        return;
+    }
+    const trade = tradeService.linkResearch(userId, tradeId, researchId)!;
+    await ctx.answerCallbackQuery({ text: '✅ Đã link!' });
+    const count = trade.linkedResearch?.length ?? 0;
+    await ctx.editMessageText(
+        `🔗 Đã link ${trade.direction.toUpperCase()} ${trade.ticker} → "${researchLabel(research.content, 50)}"\n` +
+        `Tổng research đã link: ${count}`
+    );
+});
+
+bot.callbackQuery(/^linkres_skip:.+$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText('👍 Đã bỏ qua link research.');
 });
 
 // Start webhook server (runs alongside bot polling)

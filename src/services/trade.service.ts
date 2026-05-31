@@ -15,6 +15,7 @@ export interface TradeItem {
     pnlPercent?: number;       // computed on close
     status: 'open' | 'closed';
     notes?: string;
+    linkedResearch?: string[]; // ResearchItem IDs linked to this trade (Premium)
     openedAt: string;          // ISO
     closedAt?: string;         // ISO
 }
@@ -108,7 +109,26 @@ export class TradeService {
         return this.getTrades(userId).filter((t) => t.status === 'closed');
     }
 
+    getTradeById(userId: number, tradeId: string): TradeItem | undefined {
+        return this.getTrades(userId).find((t) => t.id === tradeId);
+    }
+
     // --- Mutations ---
+
+    /**
+     * Link a research item to a trade (Premium). Idempotent — a research id is
+     * stored at most once. Returns the updated trade, or null if not found.
+     */
+    linkResearch(userId: number, tradeId: string, researchId: string): TradeItem | null {
+        const trade = this.getTradeById(userId, tradeId);
+        if (!trade) return null;
+        if (!trade.linkedResearch) trade.linkedResearch = [];
+        if (!trade.linkedResearch.includes(researchId)) {
+            trade.linkedResearch.push(researchId);
+            this.saveData();
+        }
+        return trade;
+    }
 
     openTrade(
         userId: number,
