@@ -14,10 +14,16 @@
 | **Performance analytics nâng cao** | ✅ Done Sprint 4 (`Trade Analytics`: breakdown ticker/hướng/tháng + avg hold + AI insight — Premium) |
 | **Export PDF report** | ✅ Done Sprint 4 (`Export PDF`: báo cáo PDF qua pdfkit — summary, monthly bar chart, breakdown ticker/hướng, trade log — Premium) |
 | **Hạ tầng AI** | ✅ Vertex-Key: chat `aws/claude-sonnet-4-6-medium-thinking`, fast `aws/claude-haiku-4-5` |
+| **Local test** | ✅ Bot `@edgebook_bot` chạy được (`npm start`), Trade/Research/Analytics/Export PDF test OK không cần Google. User test set Premium thủ công qua `data/plans.json` |
 
 > **Phase 3 (Trade Journal & Portfolio) hoàn tất 100%.**
 
-**Đang chờ / TODO vận hành:** `service_account.json` (Google APIs), LemonSqueezy keys (bật `/upgrade`).
+**Đang chờ / TODO vận hành:**
+- `service_account.json` (Google APIs — Save Docs/Calendar/upload ảnh). **Gitignored** → không có khi `git pull`; phải copy thủ công sang từng máy (USB / password manager), KHÔNG commit.
+- `.env` cũng gitignored — copy thủ công. *(TODO: thêm `.env.example` để document tên biến.)*
+- LemonSqueezy keys (bật `/upgrade`). Khi chưa có → test Premium bằng cách set tier trong `data/plans.json`.
+- ⚠️ Chỉ chạy **1 instance** (long-poll Telegram + JSON file-based, 2 instance sẽ 409 Conflict & hỏng data).
+
 **Sprint kế tiếp (ứng viên):** Migrate JSON→DB (PostgreSQL/Supabase) → Phase 4 (Team & API).
 
 ---
