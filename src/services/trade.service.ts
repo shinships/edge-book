@@ -38,6 +38,43 @@ export interface TradeStats {
     worst?: TradeItem;
 }
 
+// --- Advanced analytics (Premium) ---
+
+export interface TickerPerf {
+    ticker: string;
+    trades: number;            // closed trades for this ticker
+    wins: number;
+    losses: number;
+    winRate: number;           // 0-100
+    totalPnl: number;          // sum of pnlPercent
+    avgPnl: number;            // mean pnlPercent
+}
+
+export interface DirectionPerf {
+    direction: 'long' | 'short';
+    trades: number;
+    wins: number;
+    winRate: number;           // 0-100
+    totalPnl: number;
+}
+
+export interface MonthPerf {
+    month: string;             // 'YYYY-MM' (by close date)
+    trades: number;
+    totalPnl: number;
+    winRate: number;           // 0-100
+}
+
+export interface TradeAnalytics {
+    closedCount: number;
+    byTicker: TickerPerf[];    // sorted by totalPnl desc
+    byDirection: DirectionPerf[];
+    byMonth: MonthPerf[];      // chronological
+    avgHoldHours: number | null; // mean closed-trade duration, null if unknown
+    bestTicker?: TickerPerf;
+    worstTicker?: TickerPerf;
+}
+
 // --- Service ---
 
 export class TradeService {
@@ -262,6 +299,97 @@ export class TradeService {
             avgRR,
             best,
             worst,
+        };
+    }
+
+    // --- Advanced analytics (Premium) ---
+
+    /**
+     * Performance breakdown over CLOSED trades: by ticker, by direction,
+     * by calendar month (close date), plus average hold duration.
+     * A win is pnlPercent > 0. Empty buckets are omitted.
+     */
+    getAnalytics(userId: number): TradeAnalytics {
+        const closed = this.getClosedTrades(userId);
+
+        const round2 = (n: number) => Math.round(n * 100) / 100;
+        const winRate = (wins: number, total: number) =>
+            total > 0 ? Math.round((wins / total) * 1000) / 10 : 0;
+
+        // --- By ticker ---
+        const tickerMap = new Map<string, TradeItem[]>();
+        for (const t of closed) {
+            if (!tickerMap.has(t.ticker)) tickerMap.set(t.ticker, []);
+            tickerMap.get(t.ticker)!.push(t);
+        }
+        const byTicker: TickerPerf[] = Array.from(tickerMap.entries())
+            .map(([ticker, items]) => {
+                const wins = items.filter((t) => (t.pnlPercent ?? 0) > 0).length;
+                const totalPnl = round2(items.reduce((s, t) => s + (t.pnlPercent ?? 0), 0));
+                return {
+                    ticker,
+                    trades: items.length,
+                    wins,
+                    losses: items.length - wins,
+                    winRate: winRate(wins, items.length),
+                    totalPnl,
+                    avgPnl: round2(totalPnl / items.length),
+                };
+            })
+            .sort((a, b) => b.totalPnl - a.totalPnl);
+
+        // --- By direction ---
+        const byDirection: DirectionPerf[] = (['long', 'short'] as const)
+            .map((direction) => {
+                const items = closed.filter((t) => t.direction === direction);
+                const wins = items.filter((t) => (t.pnlPercent ?? 0) > 0).length;
+                return {
+                    direction,
+                    trades: items.length,
+                    wins,
+                    winRate: winRate(wins, items.length),
+                    totalPnl: round2(items.reduce((s, t) => s + (t.pnlPercent ?? 0), 0)),
+                };
+            })
+            .filter((d) => d.trades > 0);
+
+        // --- By month (close date) ---
+        const monthMap = new Map<string, TradeItem[]>();
+        for (const t of closed) {
+            const month = (t.closedAt ?? t.openedAt).slice(0, 7); // 'YYYY-MM'
+            if (!monthMap.has(month)) monthMap.set(month, []);
+            monthMap.get(month)!.push(t);
+        }
+        const byMonth: MonthPerf[] = Array.from(monthMap.entries())
+            .map(([month, items]) => {
+                const wins = items.filter((t) => (t.pnlPercent ?? 0) > 0).length;
+                return {
+                    month,
+                    trades: items.length,
+                    totalPnl: round2(items.reduce((s, t) => s + (t.pnlPercent ?? 0), 0)),
+                    winRate: winRate(wins, items.length),
+                };
+            })
+            .sort((a, b) => a.month.localeCompare(b.month));
+
+        // --- Average hold duration ---
+        const holdHours = closed
+            .filter((t) => t.closedAt)
+            .map((t) => (new Date(t.closedAt!).getTime() - new Date(t.openedAt).getTime()) / 3_600_000)
+            .filter((h) => Number.isFinite(h) && h >= 0);
+        const avgHoldHours =
+            holdHours.length > 0
+                ? round2(holdHours.reduce((a, b) => a + b, 0) / holdHours.length)
+                : null;
+
+        return {
+            closedCount: closed.length,
+            byTicker,
+            byDirection,
+            byMonth,
+            avgHoldHours,
+            bestTicker: byTicker[0],
+            worstTicker: byTicker.length > 0 ? byTicker[byTicker.length - 1] : undefined,
         };
     }
 }

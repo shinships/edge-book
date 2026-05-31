@@ -71,6 +71,25 @@ function researchLabel(content: string, max = 40): string {
     return oneLine.length > max ? oneLine.slice(0, max - 1) + '…' : oneLine;
 }
 
+// Format an average hold duration (in hours) for display: "45m", "3.5h", "2d 4h".
+// Rounds the total first and normalizes the 24h boundary so it never emits
+// impossible values like "24h" (→ "1d") or "1d 24h" (→ "2d").
+function formatHold(hours: number): string {
+    const totalMinutes = Math.round(hours * 60);
+    if (totalMinutes < 60) return `${totalMinutes}m`;
+
+    const totalHours = totalMinutes / 60;
+    if (totalHours < 24) {
+        const h = Math.round(totalHours * 10) / 10;
+        if (h < 24) return `${h}h`;   // rounds up to 24 → fall through to days
+    }
+
+    const days = Math.floor(totalMinutes / 1440);
+    const remHours = Math.round((totalMinutes % 1440) / 60);
+    if (remHours === 24) return `${days + 1}d`;
+    return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+}
+
 // Basic Command Handlers
 bot.command('start', (ctx) => ctx.reply('👋 Welcome to EdgeBook — capture your edge.\nYour trading research OS, right inside Telegram. How can I help you?'));
 
@@ -109,6 +128,7 @@ bot.command('help', (ctx) => {
         '  + "Close: BTC 112k" hoặc "Close: BTC +3.2%" — đóng lệnh\n' +
         '  + "Trades" — xem nhật ký giao dịch\n' +
         '  + "Trade Stats" — thống kê win rate, PnL, RR\n' +
+        '  + "Trade Analytics" (Premium) — breakdown ticker/hướng/tháng + AI insight\n' +
         '  + Khi đóng lệnh (Premium): chọn research để link 🔗\n' +
         '\n💳 Subscription:\n' +
         '  + "/upgrade" — nâng cấp lên Pro/Premium'
@@ -573,6 +593,57 @@ bot.on('message:text', async (ctx) => {
         if (s.best) msg += `\nBest: ${s.best.ticker} ${fmtPct(s.best.pnlPercent ?? 0)}`;
         if (s.worst) msg += `\nWorst: ${s.worst.ticker} ${fmtPct(s.worst.pnlPercent ?? 0)}`;
         await ctx.reply(msg);
+        return;
+    }
+
+    // Trade Analytics / Performance (Premium) — breakdown by ticker/direction/month + AI insight
+    if (
+        text.toLowerCase() === 'trade analytics' ||
+        text.toLowerCase() === 'analytics' ||
+        text.toLowerCase() === 'performance'
+    ) {
+        if (!planService.canUse(userId, 'canAnalytics')) {
+            await ctx.reply('🔒 Performance Analytics là tính năng Premium. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const a = tradeService.getAnalytics(userId);
+        if (a.closedCount === 0) {
+            await ctx.reply('📊 Chưa có lệnh đã đóng nào để phân tích. Đóng vài lệnh trước nhé!');
+            return;
+        }
+
+        let msg = '📈 Performance Analytics\n\n';
+        msg += `Lệnh đã đóng: ${a.closedCount}\n`;
+        if (a.avgHoldHours !== null) msg += `⏱ Giữ lệnh TB: ${formatHold(a.avgHoldHours)}\n`;
+
+        msg += '\n🏆 Theo ticker:\n';
+        a.byTicker.slice(0, 10).forEach((t) => {
+            const e = t.totalPnl > 0 ? '✅' : '❌';
+            msg += `${e} ${t.ticker}: ${t.trades} lệnh · win ${t.winRate}% · ${fmtPct(t.totalPnl)}\n`;
+        });
+
+        if (a.byDirection.length > 0) {
+            msg += '\n↕️ Theo hướng:\n';
+            a.byDirection.forEach((d) => {
+                const e = d.direction === 'long' ? '🟢' : '🔴';
+                msg += `${e} ${d.direction.toUpperCase()}: ${d.trades} lệnh · win ${d.winRate}% · ${fmtPct(d.totalPnl)}\n`;
+            });
+        }
+
+        msg += '\n🗓 Theo tháng:\n';
+        a.byMonth.forEach((m) => {
+            const e = m.totalPnl > 0 ? '✅' : '❌';
+            msg += `${e} ${m.month}: ${m.trades} lệnh · win ${m.winRate}% · ${fmtPct(m.totalPnl)}\n`;
+        });
+
+        await ctx.reply(msg);
+
+        // AI insight (best-effort — skipped silently if it fails)
+        await ctx.replyWithChatAction('typing');
+        const insight = await aiService.generateTradeInsight(a);
+        if (insight) {
+            await ctx.reply(`🤖 AI insight:\n\n${insight}`);
+        }
         return;
     }
 

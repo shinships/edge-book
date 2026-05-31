@@ -124,8 +124,9 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
 4. **Trade Journal commands** (new, Pro):
    - `Trade: <Long|Short> <ticker> entry <price> SL <price> TP <price>` — open a trade (regex-parsed, `k` suffix supported)
    - `Close: <ticker> <price>` or `Close: <ticker> +3.2%` — close most-recent open trade, auto-computes PnL%
-   - `Trades` / `My Trades` — list open + recent closed trades
+   - `Trades` / `My Trades` — list open + recent closed trades (shows 🔗N link tag)
    - `Trade Stats` — win rate, total PnL, avg planned RR, best/worst
+   - `Trade Analytics` / `Performance` (Premium) — breakdown by ticker/direction/month + avg hold + AI insight
 5. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
 6. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
 7. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc
@@ -147,7 +148,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 - **PlanService** *(new)*: File-based persistence to `data/plans.json`. Manages subscription tiers (free/pro/premium), daily forward rate limiting, feature gating, and plan expiration.
 - **UserService**: File-based persistence to `data/users.json`. Supports multi-doc aliases (e.g., `work` → `<docId>`). Auto-sets first added doc as active.
 - **TodoService**: File-based persistence to `data/todos.json`. Supports completion by index (1-based) or keyword search.
-- **TradeService** *(new)*: File-based persistence to `data/trades.json`. Manages the Trade Journal — open/close trades, auto-computes PnL% (price- or percent-based, direction-aware), and aggregates stats (win rate, total PnL, avg planned RR, best/worst). Pro-gated via `canTrade`. Also supports **research-to-trade link** (`linkResearch`/`getTradeById`, `linkedResearch: string[]` on each trade) — Premium-gated via `canLinkResearch`. On `Close:`, Premium users get an inline keyboard of recent research matching the ticker (callback `linkres:<tradeId>:<researchId>`); the `Trades` list shows a 🔗N tag for trades with links.
+- **TradeService** *(new)*: File-based persistence to `data/trades.json`. Manages the Trade Journal — open/close trades, auto-computes PnL% (price- or percent-based, direction-aware), and aggregates stats (win rate, total PnL, avg planned RR, best/worst). Pro-gated via `canTrade`. Also supports **research-to-trade link** (`linkResearch`/`getTradeById`, `linkedResearch: string[]` on each trade) — Premium-gated via `canLinkResearch`. On `Close:`, Premium users get an inline keyboard of recent research matching the ticker (callback `linkres:<tradeId>:<researchId>`); the `Trades` list shows a 🔗N tag for trades with links. Also provides **advanced analytics** (`getAnalytics` → breakdown by ticker/direction/month + avg hold duration over closed trades) — Premium-gated via `canAnalytics`, surfaced by the `Trade Analytics` command with an AI insight from `AIService.generateTradeInsight`.
 
 ### Subscription Tiers
 
@@ -158,6 +159,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 | Daily Digest | ❌ | ✅ | ✅ |
 | Trade Journal | ❌ | ✅ | ✅ |
 | Research↔Trade link | ❌ | ❌ | ✅ |
+| Perf Analytics | ❌ | ❌ | ✅ |
 | Star/Bookmark | ✅ | ✅ | ✅ |
 | Sentiment | ❌ | ❌ | ✅ |
 | Export | ❌ | ❌ | ✅ |

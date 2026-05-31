@@ -11,10 +11,11 @@
 | **Tầng 2 — Research Hub** | ✅ Done Sprint 1 (auto-tag, search, sentiment, daily digest, Ask AI) |
 | **Tầng 3 — Trade Journal MVP** | ✅ Done Sprint 3 (log/close/PnL/stats — Pro) |
 | **Research-to-trade link** | ✅ Done Sprint 4 (close lệnh → gợi ý research khớp ticker để link 🔗 — Premium) |
+| **Performance analytics nâng cao** | ✅ Done Sprint 4 (`Trade Analytics`: breakdown ticker/hướng/tháng + avg hold + AI insight — Premium) |
 | **Hạ tầng AI** | ✅ Vertex-Key: chat `aws/claude-sonnet-4-6-medium-thinking`, fast `aws/claude-haiku-4-5` |
 
 **Đang chờ / TODO vận hành:** `service_account.json` (Google APIs), LemonSqueezy keys (bật `/upgrade`).
-**Sprint kế tiếp (ứng viên):** Premium Trade analytics (breakdown theo ticker/thời gian) + Export PDF → migrate JSON→DB → Phase 4 (Team & API).
+**Sprint kế tiếp (ứng viên):** Export PDF report (monthly trade report) → migrate JSON→DB → Phase 4 (Team & API).
 
 ---
 
@@ -142,7 +143,7 @@ Sentiment: 🟡 Neutral (5/10)
 | **PnL tracking** | `Close: BTC 112k` hoặc `Close: BTC +3.2%` → tự tính PnL | ✅ Pro | ✅ Sprint 3 DONE |
 | **Trade stats cơ bản** | `Trade Stats` — win rate, total PnL, avg RR, best/worst | ✅ Pro | ✅ Sprint 3 DONE |
 | **Research-to-trade link** | Khi close trade, bot gợi ý research khớp ticker để link 🔗 | ✅ Premium | ✅ Sprint 4 DONE |
-| **Performance analytics nâng cao** | Breakdown theo ticker/thời gian, AI insight | ✅ Premium | ⏳ |
+| **Performance analytics nâng cao** | Breakdown theo ticker/thời gian, AI insight | ✅ Premium | ✅ Sprint 4 DONE |
 | **Export PDF report** | Monthly trade report với charts | ✅ Premium | ⏳ |
 
 ### Phase 4: Team & API (8-12 tuần)

@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { config } from '../config';
 import { UserService, UserProfile } from './user.service';
+import { TradeAnalytics } from './trade.service';
 
 interface ChatMessage {
     role: 'system' | 'user' | 'assistant';
@@ -238,6 +239,59 @@ Trả lời ngắn gọn, cite source nếu có. Không dùng markdown formattin
         } catch (error) {
             console.error('AI Research Q&A Error:', error);
             return '⚠️ Lỗi khi phân tích research. Vui lòng thử lại sau.';
+        }
+    }
+
+    /**
+     * Generate a short coaching insight from a trader's performance breakdown.
+     * Returns an empty string on failure so callers can simply skip the section.
+     */
+    async generateTradeInsight(analytics: TradeAnalytics): Promise<string> {
+        if (analytics.closedCount === 0) return '';
+
+        const tickerLines = analytics.byTicker
+            .slice(0, 8)
+            .map((t) => `${t.ticker}: ${t.trades} lệnh, win ${t.winRate}%, PnL ${t.totalPnl}%`)
+            .join('\n');
+        const dirLines = analytics.byDirection
+            .map((d) => `${d.direction}: ${d.trades} lệnh, win ${d.winRate}%, PnL ${d.totalPnl}%`)
+            .join('\n');
+        const monthLines = analytics.byMonth
+            .map((m) => `${m.month}: ${m.trades} lệnh, win ${m.winRate}%, PnL ${m.totalPnl}%`)
+            .join('\n');
+
+        const prompt = `Phân tích hiệu suất giao dịch của trader dưới đây và đưa ra nhận xét hữu ích.
+
+Tổng lệnh đã đóng: ${analytics.closedCount}
+${analytics.avgHoldHours !== null ? `Thời gian giữ lệnh trung bình: ${analytics.avgHoldHours} giờ\n` : ''}
+THEO TICKER:
+${tickerLines}
+
+THEO HƯỚNG:
+${dirLines}
+
+THEO THÁNG:
+${monthLines}
+
+Yêu cầu: 3-5 bullet ngắn gọn, insight thực chiến (điểm mạnh, điểm yếu, ticker/hướng nên tập trung hay tránh, gợi ý cải thiện). Không dùng markdown (* # _). Tiếng Việt.`;
+
+        try {
+            const completion = await this.client.chat.completions.create({
+                model: config.chatModel,
+                messages: [
+                    { role: 'system', content: 'Bạn là trading performance coach. Đưa nhận xét sắc bén, thực tế, dựa trên số liệu. Không dùng * # _.' },
+                    { role: 'user', content: prompt },
+                ],
+            });
+
+            let text = completion.choices[0]?.message?.content || '';
+            text = text.replace(/\*/g, '');
+            text = text.replace(/(^|\n)#+\s/g, '$1');
+            text = text.replace(/_/g, '\\_');
+            return text.trim();
+        } catch (error) {
+            console.error('AI Trade Insight Error:', error);
+            return '';
         }
     }
 }

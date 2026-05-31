@@ -25,6 +25,7 @@ export interface PlanLimits {
     canExport: boolean;
     canTrade: boolean;          // Trade Journal (Pro+)
     canLinkResearch: boolean;   // Research-to-trade link (Premium)
+    canAnalytics: boolean;      // Advanced performance analytics (Premium)
     maxDocs: number;            // -1 = unlimited
 }
 
@@ -38,6 +39,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canExport: false,
         canTrade: false,
         canLinkResearch: false,
+        canAnalytics: false,
         maxDocs: 1,
     },
     pro: {
@@ -49,6 +51,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canExport: false,
         canTrade: true,
         canLinkResearch: false,
+        canAnalytics: false,
         maxDocs: 5,
     },
     premium: {
@@ -60,6 +63,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canExport: true,
         canTrade: true,
         canLinkResearch: true,
+        canAnalytics: true,
         maxDocs: -1,
     },
 };
