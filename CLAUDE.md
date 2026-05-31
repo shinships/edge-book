@@ -182,10 +182,10 @@ All data is stored as JSON files in `data/`. Read on service init, written synch
 
 ### Git Workflow
 
-**Dự án solo — không cần tạo Pull Request.**
+**Dự án solo — KHÔNG tạo Pull Request. Không gợi ý tạo PR.**
 - Commit thẳng lên `main` cho các thay đổi nhỏ.
-- Dùng feature branch (e.g., `sprint-2a-payment`) khi làm sprint lớn, sau đó merge trực tiếp vào `main` sau khi build pass.
-- Không cần code review hay PR approval.
+- Dùng feature branch (e.g., `sprint-2a-payment`) khi làm sprint lớn, sau đó **merge trực tiếp** vào `main` sau khi build pass — không qua PR.
+- Không cần code review hay PR approval. Không chạy `gh pr create`.
 
 ### Phân vai Claude Code / Codex
 
