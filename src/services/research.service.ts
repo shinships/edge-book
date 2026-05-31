@@ -353,6 +353,57 @@ export class ResearchService {
     }
 
     /**
+     * Get weekly report data: this week's activity vs the previous week,
+     * with per-ticker sentiment shift. Used by the Weekly Report (Pro).
+     */
+    getWeeklyReportData(userId: number): {
+        totalItems: number;        // last 7 days
+        prevTotalItems: number;    // the 7 days before that
+        topTickers: { ticker: string; count: number; items: ResearchItem[] }[];
+        sentimentShifts: { ticker: string; thisAvg: number; prevAvg: number | null; shift: number | null; count: number }[];
+    } {
+        const now = Date.now();
+        const weekMs = 7 * 24 * 60 * 60 * 1000;
+        const weekAgo = new Date(now - weekMs).toISOString();
+        const twoWeeksAgo = new Date(now - 2 * weekMs).toISOString();
+
+        const items = this.getItems(userId);
+        const thisWeek = items.filter((i) => i.createdAt >= weekAgo);
+        const prevWeek = items.filter((i) => i.createdAt >= twoWeeksAgo && i.createdAt < weekAgo);
+
+        const avgSentiment = (list: ResearchItem[]): number | null =>
+            list.length === 0 ? null : Math.round((list.reduce((s, i) => s + i.sentiment, 0) / list.length) * 100) / 100;
+
+        // Group this week's items by ticker (mirrors getDigestData).
+        const tickerMap = new Map<string, ResearchItem[]>();
+        for (const item of thisWeek) {
+            for (const ticker of item.tickers) {
+                if (!tickerMap.has(ticker)) tickerMap.set(ticker, []);
+                tickerMap.get(ticker)!.push(item);
+            }
+        }
+        const topTickers = Array.from(tickerMap.entries())
+            .map(([ticker, items]) => ({ ticker, count: items.length, items }))
+            .sort((a, b) => b.count - a.count);
+
+        // Sentiment shift = this week's avg sentiment minus previous week's, per top ticker.
+        const sentimentShifts = topTickers.slice(0, 8).map(({ ticker, items, count }) => {
+            const thisAvg = avgSentiment(items) ?? 0;
+            const prevItems = prevWeek.filter((i) => i.tickers.includes(ticker));
+            const prevAvg = avgSentiment(prevItems);
+            const shift = prevAvg === null ? null : Math.round((thisAvg - prevAvg) * 100) / 100;
+            return { ticker, thisAvg, prevAvg, shift, count };
+        });
+
+        return {
+            totalItems: thisWeek.length,
+            prevTotalItems: prevWeek.length,
+            topTickers,
+            sentimentShifts,
+        };
+    }
+
+    /**
      * Get stats for a user.
      */
     getStats(userId: number): {

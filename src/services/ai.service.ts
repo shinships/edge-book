@@ -198,6 +198,71 @@ Format yêu cầu:
     }
 
     /**
+     * Generate a weekly research report: top tickers, sentiment shift vs last
+     * week, and key insights. Returns a fallback string on failure.
+     */
+    async generateWeeklyReport(data: {
+        totalItems: number;
+        prevTotalItems: number;
+        topTickers: { ticker: string; count: number; items: { content: string; sentiment: number; sourceName?: string }[] }[];
+        sentimentShifts: { ticker: string; thisAvg: number; prevAvg: number | null; shift: number | null; count: number }[];
+    }): Promise<string> {
+        if (data.totalItems === 0) {
+            return '📭 Không có research nào trong 7 ngày qua. Forward tin vào bot để tuần sau có report nhé!';
+        }
+
+        const shiftLines = data.sentimentShifts.map((s) => {
+            const prev = s.prevAvg === null ? 'mới' : s.prevAvg.toFixed(2);
+            const shift = s.shift === null ? 'n/a' : (s.shift > 0 ? `+${s.shift}` : `${s.shift}`);
+            return `${s.ticker}: ${s.count} mentions, sentiment ${s.thisAvg.toFixed(2)} (tuần trước ${prev}, shift ${shift})`;
+        }).join('\n');
+
+        const tickerSummaries = data.topTickers.slice(0, 5).map((t) => {
+            const snippets = t.items.slice(0, 4).map((i) => {
+                const source = i.sourceName ? `[${i.sourceName}]` : '';
+                return `${source} ${i.content.substring(0, 180)}`;
+            }).join('\n');
+            return `--- ${t.ticker} (${t.count} mentions) ---\n${snippets}`;
+        }).join('\n\n');
+
+        const prompt = `Tạo Weekly Research Report từ data 7 ngày qua. Ngắn gọn, dễ đọc trên Telegram (không dùng ** hay #).
+
+Tổng tuần này: ${data.totalItems} items (tuần trước: ${data.prevTotalItems})
+
+SENTIMENT SHIFT theo ticker:
+${shiftLines}
+
+NỘI DUNG NỔI BẬT:
+${tickerSummaries}
+
+Format yêu cầu:
+1. Header với emoji "Weekly Report" + khoảng thời gian
+2. Tổng quan hoạt động tuần (so với tuần trước: tăng/giảm)
+3. Top tickers + sentiment, NHẤN MẠNH ticker có sentiment shift đáng chú ý (🔺 cải thiện / 🔻 xấu đi)
+4. 2-4 key insights / things to watch tuần tới
+5. Tối đa 450 từ`;
+
+        try {
+            const completion = await this.client.chat.completions.create({
+                model: config.chatModel,
+                messages: [
+                    { role: 'system', content: 'Bạn là research analyst. Tạo weekly report sắc bén, nhấn mạnh thay đổi sentiment tuần qua tuần. Không dùng markdown (* # _).' },
+                    { role: 'user', content: prompt },
+                ],
+            });
+
+            let text = completion.choices[0]?.message?.content || 'Không thể tạo weekly report.';
+            text = text.replace(/\*/g, '');
+            text = text.replace(/(^|\n)#+\s/g, '$1');
+            text = text.replace(/_/g, '\\_');
+            return text;
+        } catch (error) {
+            console.error('AI Weekly Report Error:', error);
+            return '⚠️ Lỗi khi tạo weekly report. Vui lòng thử lại sau.';
+        }
+    }
+
+    /**
      * Answer a question about the user's saved research.
      */
     async askAboutResearch(question: string, researchItems: { content: string; tickers: string[]; sourceName?: string; createdAt: string }[]): Promise<string> {

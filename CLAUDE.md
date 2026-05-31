@@ -118,6 +118,7 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
    - `Search: <keyword>` — full-text search in saved research (Pro)
    - `Tag: <ticker>` — filter by ticker symbol (Pro)
    - `Digest` / `Daily Digest` — AI-generated daily summary (Pro)
+   - `Weekly Report` / `Weekly` — 7-day report: top tickers, per-ticker sentiment shift vs last week, key insights (Pro)
    - `Stats` — research statistics and top tickers
    - `Starred` / `Bookmarks` — view bookmarked items
    - `Star` / `⭐` — bookmark the most recent research item
@@ -145,9 +146,9 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 
 ### Service Layer
 
-- **AIService**: Uses OpenAI SDK (`openai` package) with Vertex-Key.com as base URL. Manages per-user conversation history (messages array) with personalized system instructions. History is in-memory (Map, max 50 messages), not persisted. Post-processes responses to strip markdown formatting (bold, headers) and escape underscores. Also provides `generateDigest()` and `askAboutResearch()` for the Research OS.
+- **AIService**: Uses OpenAI SDK (`openai` package) with Vertex-Key.com as base URL. Manages per-user conversation history (messages array) with personalized system instructions. History is in-memory (Map, max 50 messages), not persisted. Post-processes responses to strip markdown formatting (bold, headers) and escape underscores. Also provides `generateDigest()`, `generateWeeklyReport()` (top tickers + sentiment shift) and `askAboutResearch()` for the Research OS, plus `generateTradeInsight()` for trade analytics.
 - **GoogleService**: Thin wrappers around Google APIs. Uses Service Account auth. Calendar defaults to `Asia/Ho_Chi_Minh` timezone.
-- **ResearchService** *(new)*: File-based persistence to `data/research.json`. Manages research items with auto-tagging (tickers via regex), category classification (keyword-based), sentiment scoring (rule-based), search (by keyword/ticker/category), star/bookmark, and digest data aggregation.
+- **ResearchService** *(new)*: File-based persistence to `data/research.json`. Manages research items with auto-tagging (tickers via regex), category classification (keyword-based), sentiment scoring (rule-based), search (by keyword/ticker/category), star/bookmark, digest data aggregation, and weekly-report data (`getWeeklyReportData` — this-week vs last-week activity + per-ticker sentiment shift).
 - **PlanService** *(new)*: File-based persistence to `data/plans.json`. Manages subscription tiers (free/pro/premium), daily forward rate limiting, feature gating, and plan expiration.
 - **UserService**: File-based persistence to `data/users.json`. Supports multi-doc aliases (e.g., `work` → `<docId>`). Auto-sets first added doc as active.
 - **TodoService**: File-based persistence to `data/todos.json`. Supports completion by index (1-based) or keyword search.
@@ -169,14 +170,16 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 | Export | ❌ | ❌ | ✅ |
 | Max Docs | 1 | 5 | Unlimited |
 
-### Daily Digest Cron
+### Cron Jobs
 
-A `node-cron` job runs at **08:00 daily (Asia/Ho_Chi_Minh)** that:
+**Daily Digest** — a `node-cron` job runs at **08:00 daily (Asia/Ho_Chi_Minh)** that:
 1. Gathers research items from the last 24 hours per user
 2. Groups by ticker, calculates sentiment
 3. Generates AI-powered summary via `AIService.generateDigest()`
 4. Sends formatted digest to each eligible user via Telegram
 5. Checks and downgrades expired subscription plans
+
+**Weekly Report** — a `node-cron` job runs at **18:00 every Sunday (Asia/Ho_Chi_Minh)** that, for each digest-eligible (Pro/Premium) user with research in the last 7 days, builds `getWeeklyReportData()` and sends an AI report (`AIService.generateWeeklyReport()`) highlighting per-ticker sentiment shift vs the previous week.
 
 ### Data Persistence
 

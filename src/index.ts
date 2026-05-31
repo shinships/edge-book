@@ -131,6 +131,7 @@ bot.command('help', (ctx) => {
         '  + "Search: <keyword>" — tìm research\n' +
         '  + "Tag: <ticker>" — xem theo ticker\n' +
         '  + "Digest" — xem daily digest\n' +
+        '  + "Weekly Report" — báo cáo tuần + sentiment shift (Pro)\n' +
         '  + "Stats" — thống kê research\n' +
         '  + "Starred" — xem bookmarks\n' +
         '  + "Ask: <question>" — hỏi AI về research\n' +
@@ -339,6 +340,24 @@ bot.on('message:text', async (ctx) => {
         const digestData = researchService.getDigestData(userId, 24);
         const digest = await aiService.generateDigest(digestData);
         await ctx.reply(digest);
+        return;
+    }
+
+    // "Weekly Report" — 7-day report with sentiment shift (Pro)
+    if (
+        text.toLowerCase() === 'weekly report' ||
+        text.toLowerCase() === 'weekly' ||
+        text.toLowerCase() === 'weekly digest'
+    ) {
+        if (!planService.canUse(userId, 'canDigest')) {
+            await ctx.reply('🔒 Weekly Report là tính năng Pro. Nâng cấp để sử dụng!\n\nGõ /plan để xem chi tiết.');
+            return;
+        }
+
+        await ctx.replyWithChatAction('typing');
+        const weeklyData = researchService.getWeeklyReportData(userId);
+        const report = await aiService.generateWeeklyReport(weeklyData);
+        await ctx.reply(report);
         return;
     }
 
@@ -930,6 +949,35 @@ cron.schedule('0 8 * * *', async () => {
     planService.checkExpiredPlans();
 
     console.log('[Digest] Daily digest cron completed.');
+}, {
+    timezone: 'Asia/Ho_Chi_Minh',
+});
+
+// --- WEEKLY REPORT CRON JOB ---
+// Runs at 18:00 every Sunday (Asia/Ho_Chi_Minh timezone)
+cron.schedule('0 18 * * 0', async () => {
+    console.log('[Weekly] Running weekly report cron...');
+
+    const eligibleUsers = planService.getDigestEligibleUsers();
+    const allResearchUsers = researchService.getAllUserIds();
+    const usersToReport = [...new Set([...eligibleUsers, ...allResearchUsers])];
+
+    for (const userId of usersToReport) {
+        try {
+            // Only send to users who can use digest (Pro/Premium).
+            if (!planService.canUse(userId, 'canDigest')) continue;
+            const weeklyData = researchService.getWeeklyReportData(userId);
+            if (weeklyData.totalItems === 0) continue; // Skip users with no research this week
+
+            const report = await aiService.generateWeeklyReport(weeklyData);
+            await bot.api.sendMessage(userId, `🗓️ Weekly Research Report\n\n${report}`);
+            console.log(`[Weekly] Sent weekly report to user ${userId} (${weeklyData.totalItems} items)`);
+        } catch (error) {
+            console.error(`[Weekly] Error sending weekly report to user ${userId}:`, error);
+        }
+    }
+
+    console.log('[Weekly] Weekly report cron completed.');
 }, {
     timezone: 'Asia/Ho_Chi_Minh',
 });
