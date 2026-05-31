@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard } from 'grammy';
+import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import { config } from './config';
 import { AIService } from './services/ai.service';
 import { GoogleService } from './services/google.service';
@@ -9,6 +9,7 @@ import { ResearchService } from './services/research.service';
 import { PlanService } from './services/plan.service';
 import { PaymentService } from './services/payment.service';
 import { TradeService } from './services/trade.service';
+import { ReportService } from './services/report.service';
 import { startWebhookServer } from './webhook.server';
 import fs from 'fs';
 import https from 'https';
@@ -24,6 +25,7 @@ const researchService = new ResearchService();
 const planService = new PlanService();
 const paymentService = new PaymentService(planService);
 const tradeService = new TradeService();
+const reportService = new ReportService();
 
 // Parse a positive price string that may use a "k" suffix (e.g. "108k" -> 108000).
 // Returns undefined for malformed input (e.g. "1.2.3", ".", "0", negatives).
@@ -90,6 +92,16 @@ function formatHold(hours: number): string {
     return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
 
+// Strip Vietnamese diacritics to plain ASCII (pdfkit built-in fonts can't render them).
+function toAscii(s: string): string {
+    return s
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')    // combining diacritics
+        .replace(/đ/g, 'd').replace(/Đ/g, 'D')
+        .replace(/[^\x20-\x7e]/g, '')       // drop any remaining non-ASCII
+        .trim();
+}
+
 // Basic Command Handlers
 bot.command('start', (ctx) => ctx.reply('👋 Welcome to EdgeBook — capture your edge.\nYour trading research OS, right inside Telegram. How can I help you?'));
 
@@ -129,6 +141,7 @@ bot.command('help', (ctx) => {
         '  + "Trades" — xem nhật ký giao dịch\n' +
         '  + "Trade Stats" — thống kê win rate, PnL, RR\n' +
         '  + "Trade Analytics" (Premium) — breakdown ticker/hướng/tháng + AI insight\n' +
+        '  + "Export PDF" (Premium) — xuất báo cáo giao dịch PDF\n' +
         '  + Khi đóng lệnh (Premium): chọn research để link 🔗\n' +
         '\n💳 Subscription:\n' +
         '  + "/upgrade" — nâng cấp lên Pro/Premium'
@@ -643,6 +656,45 @@ bot.on('message:text', async (ctx) => {
         const insight = await aiService.generateTradeInsight(a);
         if (insight) {
             await ctx.reply(`🤖 AI insight:\n\n${insight}`);
+        }
+        return;
+    }
+
+    // Export / Export PDF — monthly trade report PDF (Premium)
+    if (
+        text.toLowerCase() === 'export' ||
+        text.toLowerCase() === 'export pdf' ||
+        text.toLowerCase() === 'export trades' ||
+        text.toLowerCase() === 'export report'
+    ) {
+        if (!planService.canUse(userId, 'canExport')) {
+            await ctx.reply('🔒 Export PDF là tính năng Premium. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const stats = tradeService.getStats(userId);
+        if (stats.closed === 0) {
+            await ctx.reply('📄 Chưa có lệnh đã đóng nào để xuất báo cáo. Đóng vài lệnh trước nhé!');
+            return;
+        }
+        await ctx.reply('📄 Đang tạo báo cáo PDF...');
+        try {
+            const profile = userService.getUser(userId);
+            const traderName =
+                toAscii(profile.fullName || profile.username || '') || `Trader ${userId}`;
+            const pdf = await reportService.generateTradeReport({
+                traderName,
+                generatedAt: new Date(),
+                stats,
+                analytics: tradeService.getAnalytics(userId),
+                closedTrades: [...tradeService.getClosedTrades(userId)].reverse(), // newest first
+            });
+            const fileName = `edgebook-trade-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+            await ctx.replyWithDocument(new InputFile(pdf, fileName), {
+                caption: '📈 EdgeBook Trade Performance Report',
+            });
+        } catch (error) {
+            console.error('PDF export error:', error);
+            await ctx.reply('⚠️ Lỗi khi tạo PDF. Vui lòng thử lại sau.');
         }
         return;
     }

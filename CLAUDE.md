@@ -15,6 +15,7 @@
 | Bot Framework| grammY v1.20                                  |
 | AI           | Vertex-Key.com (`openai` SDK) — model `aws/claude-haiku-4-5` via OpenAI-compatible API |
 | Google APIs  | `googleapis` (Calendar v3, Drive v3, Docs v1) |
+| PDF          | `pdfkit` — trade report export (ASCII/English text; built-in fonts can't render VN diacritics) |
 | Auth         | Google Service Account (`service_account.json`) |
 | Config       | `dotenv` (`.env` file)                        |
 | Dev          | `nodemon` + `ts-node` for hot-reload          |
@@ -45,10 +46,11 @@ edge-book/
 │   │   ├── google.service.ts   # Calendar, Drive, Docs API wrappers
 │   │   ├── payment.service.ts  # LemonSqueezy checkout creation, HMAC verify, upgrade logic
 │   │   ├── plan.service.ts     # Subscription tier tracking & feature gating
+│   │   ├── report.service.ts   # PDF trade report generation via pdfkit (Premium export)
 │   │   ├── research.service.ts # Research items: auto-tagging, search, star, digest data
 │   │   ├── shopee.service.ts   # Shopee price tracker & flash sale notifier
 │   │   ├── todo.service.ts     # File-based to-do CRUD per user
-│   │   ├── trade.service.ts    # Trade Journal: open/close trades, PnL calc, stats (Pro)
+│   │   ├── trade.service.ts    # Trade Journal: open/close trades, PnL calc, stats, analytics (Pro/Premium)
 │   │   └── user.service.ts     # File-based user profile management & doc aliases
 │   ├── utils/                  # (empty — reserved for future utilities)
 │   ├── test-ai.ts              # Manual test: verify Vertex-Key API connection
@@ -127,6 +129,7 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
    - `Trades` / `My Trades` — list open + recent closed trades (shows 🔗N link tag)
    - `Trade Stats` — win rate, total PnL, avg planned RR, best/worst
    - `Trade Analytics` / `Performance` (Premium) — breakdown by ticker/direction/month + avg hold + AI insight
+   - `Export` / `Export PDF` (Premium) — generates a PDF trade report (summary, monthly bar chart, ticker/direction breakdown, trade log) via `ReportService` and sends it as a Telegram document
 5. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
 6. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
 7. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc
@@ -149,6 +152,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 - **UserService**: File-based persistence to `data/users.json`. Supports multi-doc aliases (e.g., `work` → `<docId>`). Auto-sets first added doc as active.
 - **TodoService**: File-based persistence to `data/todos.json`. Supports completion by index (1-based) or keyword search.
 - **TradeService** *(new)*: File-based persistence to `data/trades.json`. Manages the Trade Journal — open/close trades, auto-computes PnL% (price- or percent-based, direction-aware), and aggregates stats (win rate, total PnL, avg planned RR, best/worst). Pro-gated via `canTrade`. Also supports **research-to-trade link** (`linkResearch`/`getTradeById`, `linkedResearch: string[]` on each trade) — Premium-gated via `canLinkResearch`. On `Close:`, Premium users get an inline keyboard of recent research matching the ticker (callback `linkres:<tradeId>:<researchId>`); the `Trades` list shows a 🔗N tag for trades with links. Also provides **advanced analytics** (`getAnalytics` → breakdown by ticker/direction/month + avg hold duration over closed trades) — Premium-gated via `canAnalytics`, surfaced by the `Trade Analytics` command with an AI insight from `AIService.generateTradeInsight`.
+- **ReportService** *(new)*: Generates a trade performance **PDF** with `pdfkit` (in-memory `Buffer`, sent via grammY `InputFile`). Renders a header banner, summary, a drawn monthly-PnL bar chart, by-ticker/by-direction tables, and a closed-trade log with multi-page support (`bufferPages: true` for the footer pass). PDF text is **ASCII/English** — pdfkit's built-in fonts can't render Vietnamese diacritics, so `index.ts` runs the trader name through a `toAscii()` helper. Premium-gated via `canExport`.
 
 ### Subscription Tiers
 
