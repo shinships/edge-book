@@ -113,4 +113,12 @@ export class UserService {
         const user = this.getUser(id);
         return user.activeDocId;
     }
+
+    // Reverse-lookup: the alias the active doc was saved under (if any).
+    getActiveDocAlias(id: number): string | undefined {
+        const user = this.getUser(id);
+        if (!user.activeDocId || !user.docAliases) return undefined;
+        return Object.keys(user.docAliases)
+            .find((alias) => user.docAliases![alias] === user.activeDocId);
+    }
 }

@@ -111,6 +111,11 @@ function isForwarded(message: any): boolean {
     return message?.forward_origin !== undefined;
 }
 
+// Build a clickable Google Docs URL from a document ID.
+function docUrl(docId: string): string {
+    return `https://docs.google.com/document/d/${docId}/edit`;
+}
+
 function getForwardSource(message: any): string | undefined {
     const origin = message?.forward_origin;
     if (!origin) return undefined;
@@ -212,9 +217,19 @@ bot.on('message:text', async (ctx) => {
     if (text.toLowerCase() === 'current doc') {
         const activeId = userService.getActiveDocId(userId);
         if (activeId) {
-            await ctx.reply(`📂 Current Doc ID: ${activeId}`);
+            const alias = userService.getActiveDocAlias(userId);
+            const aliasLine = alias ? `\n🏷️ Alias: ${alias}` : '';
+            await ctx.reply(
+                `📂 Current Doc${aliasLine}\n🆔 ${activeId}\n🔗 ${docUrl(activeId)}`,
+                { link_preview_options: { is_disabled: true } }
+            );
+        } else if (config.googleDocId) {
+            await ctx.reply(
+                `📂 Current Doc: system default\n🆔 ${config.googleDocId}\n🔗 ${docUrl(config.googleDocId)}`,
+                { link_preview_options: { is_disabled: true } }
+            );
         } else {
-            await ctx.reply('📂 Using system default Doc ID (if configured).');
+            await ctx.reply('📂 No Doc configured yet. Use "Add Doc [name] [ID]" to add one.');
         }
         return;
     }
