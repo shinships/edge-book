@@ -104,6 +104,25 @@ function toAscii(s: string): string {
         .trim();
 }
 
+// Telegram Bot API 7.0 (Dec 2023) removed forward_date/forward_from/forward_from_chat/
+// forward_sender_name in favour of a single `forward_origin` object. Detect forwards and
+// extract the original source name from whichever origin variant is present.
+function isForwarded(message: any): boolean {
+    return message?.forward_origin !== undefined;
+}
+
+function getForwardSource(message: any): string | undefined {
+    const origin = message?.forward_origin;
+    if (!origin) return undefined;
+    switch (origin.type) {
+        case 'user':         return origin.sender_user?.first_name;
+        case 'hidden_user':  return origin.sender_user_name;
+        case 'chat':         return origin.sender_chat?.title;
+        case 'channel':      return origin.chat?.title;
+        default:             return undefined;
+    }
+}
+
 // Basic Command Handlers
 bot.command('start', (ctx) => ctx.reply('👋 Welcome to EdgeBook — capture your edge.\nYour trading research OS, right inside Telegram. How can I help you?'));
 
@@ -838,7 +857,7 @@ bot.on('message:text', async (ctx) => {
 
     // 3. Save to Docs (Command OR Forward) — ENHANCED with Research OS
     // Check for "Save:" command OR if the message is Forwarded
-    const isForward = (ctx.message as any).forward_date !== undefined;
+    const isForward = isForwarded(ctx.message);
     const isSaveCommand = text.toLowerCase().startsWith('save:');
 
     if (isSaveCommand || isForward) {
@@ -863,10 +882,7 @@ bot.on('message:text', async (ctx) => {
         const targetDocId = userService.getActiveDocId(userId) || config.googleDocId;
 
         // --- Save to Research Service (auto-tag) ---
-        const forwardFrom = (ctx.message as any).forward_sender_name
-            || (ctx.message as any).forward_from?.first_name
-            || (ctx.message as any).forward_from_chat?.title
-            || undefined;
+        const forwardFrom = getForwardSource(ctx.message);
 
         const researchItem = researchService.addItem(userId, content, forwardFrom);
         planService.incrementForwardCount(userId);
@@ -955,7 +971,7 @@ bot.on('message:photo', async (ctx) => {
     if (!photo || !userId) return;
 
     // Check for "Save" keyword OR if it is a Forward
-    const isForward = (ctx.message as any).forward_date !== undefined;
+    const isForward = isForwarded(ctx.message);
     const hasSaveKeyword = /save/i.test(caption); // No longer checking "lưu" unless requested
 
     if (!hasSaveKeyword && !isForward) {
@@ -996,10 +1012,7 @@ bot.on('message:photo', async (ctx) => {
 
                     // Also save caption to research if it has content
                     if (cleanCaption) {
-                        const forwardFrom = (ctx.message as any).forward_sender_name
-                            || (ctx.message as any).forward_from?.first_name
-                            || (ctx.message as any).forward_from_chat?.title
-                            || undefined;
+                        const forwardFrom = getForwardSource(ctx.message);
                         researchService.addItem(userId, `[Image] ${cleanCaption}`, forwardFrom);
                     }
                     planService.incrementForwardCount(userId);
