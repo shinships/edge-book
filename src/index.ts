@@ -115,6 +115,15 @@ function docUrl(docId: string): string {
 }
 
 /**
+ * Strip wrapping brackets/quotes a user copies from placeholder syntax,
+ * e.g. `Add Doc [ideas] [<id>]` → alias `ideas`, id `id`.
+ * The help text shows `[tên] [ID]` as placeholders; users often type the brackets literally.
+ */
+function stripWrappers(s: string): string {
+    return s.replace(/^[\[\(<"'`]+/, '').replace(/[\]\)>"'`]+$/, '').trim();
+}
+
+/**
  * Build a user-facing reason for a Google Docs write failure.
  * A 403 almost always means the target doc isn't shared with the service account,
  * so we surface the SA email + the exact doc so the user can fix it themselves.
@@ -208,8 +217,12 @@ bot.on('message:text', async (ctx) => {
     // "Add Doc [Alias] [ID]"
     const addDocMatch = text.match(/^add doc\s+(\S+)\s+(\S+)/i);
     if (addDocMatch) {
-        const alias = addDocMatch[1];
-        const docId = addDocMatch[2];
+        const alias = stripWrappers(addDocMatch[1]);
+        const docId = stripWrappers(addDocMatch[2]);
+        if (!alias || !docId) {
+            await ctx.reply('⚠️ Cú pháp: Add Doc tên ID (không cần ngoặc vuông).');
+            return;
+        }
         userService.setDocAlias(userId, alias, docId);
         await ctx.reply(`✅ Added Doc "${alias}". Set as default if none existed.`);
         return;
@@ -218,7 +231,7 @@ bot.on('message:text', async (ctx) => {
     // "Use Doc [Alias/ID]"
     const setDocMatch = text.match(/^use doc\s+(\S+)/i); // or "Select Doc"
     if (setDocMatch) {
-        const alias = setDocMatch[1];
+        const alias = stripWrappers(setDocMatch[1]);
         if (userService.setActiveDoc(userId, alias)) {
             await ctx.reply(`✅ Switched to Doc: ${alias}`);
         } else {
