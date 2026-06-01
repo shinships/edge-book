@@ -1,7 +1,7 @@
 import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import { config } from './config';
 import { AIService } from './services/ai.service';
-import { GoogleService } from './services/google.service';
+import { GoogleService, GoogleApiError } from './services/google.service';
 import { UserService } from './services/user.service';
 import { TodoService } from './services/todo.service';
 import { ResearchService } from './services/research.service';
@@ -112,6 +112,20 @@ function isForwarded(message: any): boolean {
 // Build a clickable Google Docs URL from a document ID.
 function docUrl(docId: string): string {
     return `https://docs.google.com/document/d/${docId}/edit`;
+}
+
+/**
+ * Build a user-facing reason for a Google Docs write failure.
+ * A 403 almost always means the target doc isn't shared with the service account,
+ * so we surface the SA email + the exact doc so the user can fix it themselves.
+ */
+function docSyncErrorReason(error: any, docId: string): string {
+    if (error instanceof GoogleApiError && error.status === 403) {
+        const sa = googleService.getServiceAccountEmail();
+        const shareWith = sa ? `\n📧 Share doc cho email này (quyền Editor):\n${sa}` : '';
+        return `\n⚠️ Bot chưa có quyền edit doc đang chọn.${shareWith}\n🔗 ${docUrl(docId)}`;
+    }
+    return `\n⚠️ Google Docs sync failed.`;
 }
 
 function getForwardSource(message: any): string | undefined {
@@ -916,7 +930,7 @@ bot.on('message:text', async (ctx) => {
                 }
             } catch (error) {
                 // Google Docs failed, but research is still saved locally
-                await ctx.reply(`✅ Research saved locally${tagInfo}${catInfo}${sentimentInfo}\n⚠️ Google Docs sync failed.`);
+                await ctx.reply(`✅ Research saved locally${tagInfo}${catInfo}${sentimentInfo}${docSyncErrorReason(error, targetDocId)}`);
             }
         } else {
             // No Google Doc configured — still save to research
@@ -1007,7 +1021,8 @@ bot.on('message:photo', async (ctx) => {
                 }
             } catch (docError) {
                 console.error('Docs Insert Error:', docError);
-                await ctx.reply('⚠️ Failed to save image to Docs.');
+                const targetDocId = userService.getActiveDocId(userId) || config.googleDocId;
+                await ctx.reply(`⚠️ Lưu ảnh vào Docs thất bại.${docSyncErrorReason(docError, targetDocId)}`);
             }
         }
     } catch (error) {
