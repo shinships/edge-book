@@ -18,6 +18,14 @@ export const config = {
     lsPremiumVariantId: process.env.LEMONSQUEEZY_PREMIUM_VARIANT_ID || '',
     lsWebhookSecret: process.env.LEMONSQUEEZY_WEBHOOK_SECRET || '',
     webhookPort: parseInt(process.env.WEBHOOK_PORT || '3000', 10),
+
+    // --- Admin ---
+    // Telegram user IDs with admin privileges (always treated as Premium).
+    // Comma-separated in .env, e.g. ADMIN_USER_IDS=123,456
+    adminUserIds: (process.env.ADMIN_USER_IDS || '')
+        .split(',')
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => Number.isFinite(n)),
 };
 
 

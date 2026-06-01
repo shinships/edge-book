@@ -77,11 +77,24 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
 export class PlanService {
     private dataPath: string;
     private plans: Map<number, UserPlan>;
+    private adminIds: Set<number>;
 
-    constructor() {
+    constructor(adminIds: number[] = []) {
         this.dataPath = path.resolve(__dirname, '../../data/plans.json');
         this.plans = new Map();
+        this.adminIds = new Set(adminIds);
         this.loadData();
+    }
+
+    /** True if the user is configured as an admin (always treated as Premium). */
+    isAdmin(userId: number): boolean {
+        return this.adminIds.has(userId);
+    }
+
+    /** The tier used for feature gating — admins are always 'premium'. */
+    private effectiveTier(userId: number): PlanTier {
+        if (this.isAdmin(userId)) return 'premium';
+        return this.getPlan(userId).tier;
     }
 
     // --- Persistence ---
@@ -151,8 +164,7 @@ export class PlanService {
      * Get the limits for a user's current plan.
      */
     getLimits(userId: number): PlanLimits {
-        const plan = this.getPlan(userId);
-        return PLAN_LIMITS[plan.tier];
+        return PLAN_LIMITS[this.effectiveTier(userId)];
     }
 
     /**
@@ -168,7 +180,7 @@ export class PlanService {
      */
     canForward(userId: number): { allowed: boolean; remaining: number; limit: number } {
         const plan = this.getPlan(userId);
-        const limits = PLAN_LIMITS[plan.tier];
+        const limits = PLAN_LIMITS[this.effectiveTier(userId)];
 
         if (limits.maxForwardsPerDay === -1) {
             return { allowed: true, remaining: -1, limit: -1 };
@@ -231,11 +243,14 @@ export class PlanService {
      */
     getPlanInfo(userId: number): string {
         const plan = this.getPlan(userId);
-        const limits = PLAN_LIMITS[plan.tier];
-        const forwardStatus = this.canForward(userId);
+        const tier = this.effectiveTier(userId);
+        const limits = PLAN_LIMITS[tier];
+        const admin = this.isAdmin(userId);
 
-        const tierEmoji = plan.tier === 'free' ? '🆓' : plan.tier === 'pro' ? '⭐' : '💎';
-        let info = `${tierEmoji} Plan: ${plan.tier.toUpperCase()}\n`;
+        const tierEmoji = admin ? '🛡️' : tier === 'free' ? '🆓' : tier === 'pro' ? '⭐' : '💎';
+        let info = admin
+            ? `🛡️ Plan: ADMIN (Premium access)\n`
+            : `${tierEmoji} Plan: ${tier.toUpperCase()}\n`;
 
         if (limits.maxForwardsPerDay !== -1) {
             info += `📤 Forwards hôm nay: ${plan.dailyForwardCount}/${limits.maxForwardsPerDay}\n`;
@@ -248,14 +263,16 @@ export class PlanService {
         info += `📈 Sentiment: ${limits.canSentiment ? '✅' : '🔒 Premium'}\n`;
         info += `📄 Export: ${limits.canExport ? '✅' : '🔒 Premium'}`;
 
-        if (plan.expiresAt) {
+        if (admin) {
+            info += `\n♾️ Quyền admin — không giới hạn thời gian`;
+        } else if (plan.expiresAt) {
             const expDate = new Date(plan.expiresAt).toLocaleDateString('vi-VN');
             info += `\n⏰ Hết hạn: ${expDate}`;
-        } else if (plan.tier !== 'free') {
+        } else if (tier !== 'free') {
             info += `\n♾️ Không giới hạn thời gian`;
         }
 
-        if (plan.tier === 'free') {
+        if (!admin && tier === 'free') {
             info += `\n\n💡 Upgrade để mở khoá Search, Digest và nhiều hơn nữa!\n👉 Gõ /upgrade để xem các gói`;
         }
 
@@ -266,12 +283,16 @@ export class PlanService {
      * Get all user IDs with active Pro/Premium plans (for digest cron).
      */
     getDigestEligibleUsers(): number[] {
-        const eligible: number[] = [];
+        const eligible = new Set<number>();
         for (const [userId, plan] of this.plans.entries()) {
             if (PLAN_LIMITS[plan.tier].canDigest) {
-                eligible.push(userId);
+                eligible.add(userId);
             }
         }
-        return eligible;
+        // Admins are always Premium → always digest-eligible, even with no stored plan.
+        for (const adminId of this.adminIds) {
+            eligible.add(adminId);
+        }
+        return Array.from(eligible);
     }
 }
