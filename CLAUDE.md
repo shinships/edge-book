@@ -110,7 +110,7 @@ LemonSqueezy keys are optional; if absent, the `/upgrade` command shows a "not c
 
 All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers in `index.ts`. Message routing uses **regex matching + keyword detection** in this priority order:
 
-1. **Doc management**: `Add Doc <alias> <id>`, `Use Doc <alias>`, `Current Doc`
+1. **Doc management**: `Add Doc <alias> <id>`, `Use Doc <alias>`, `Current Doc` (replies with the active doc's alias + ID + a clickable `docs.google.com` link; falls back to `GOOGLE_DOC_ID` default)
 2. **To-Do List**: Quick task management via `Add Task: [content]` and `List Tasks`.
    - **Shopee Tracker**: Monitor prices and get alerted before Flash Sales. Commands:
    - `Track Shopee <link>` or `Theo dõi <link>`
@@ -176,6 +176,8 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 | Sentiment | ❌ | ❌ | ✅ |
 | Export | ❌ | ❌ | ✅ |
 | Max Docs | 1 | 5 | Unlimited |
+
+> **Admin override:** Telegram user IDs in `ADMIN_USER_IDS` (`.env`) are always treated as **Premium** regardless of stored plan — every gate passes, unlimited forwards, always digest-eligible. See `PlanService.isAdmin()` / `effectiveTier()`.
 
 ### Cron Jobs
 

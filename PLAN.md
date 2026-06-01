@@ -2,11 +2,11 @@
 
 > **Brand: EdgeBook** — *"capture your edge."* Trading research OS sống trong Telegram.
 
-## 0. Trạng thái hiện tại *(cập nhật 2026-05-31)*
+## 0. Trạng thái hiện tại *(cập nhật 2026-06-01)*
 
 | Hạng mục | Trạng thái |
 |---|---|
-| **Brand** | ✅ Rebrand "Bot Forward Docs" → **EdgeBook** (repo `shincapitals/edge-book`, npm `edgebook`, bot `@edgebook_bot`) |
+| **Brand** | ✅ Rebrand "Bot Forward Docs" → **EdgeBook** (repo `shincapitals/edge-book`, npm `edgebook`, bot `@edgebook_bot` — token đã trỏ đúng bot, chạy live) |
 | **Tầng 1 — Capture Engine** | ✅ Done (forward → Docs, AI chat, Calendar, To-Do, Shopee) |
 | **Tầng 2 — Research Hub** | ✅ **Hoàn tất 100%** — Sprint 1 (auto-tag, search, sentiment, daily digest, Ask AI) + Weekly Report (Sprint 5 — Pro) + Thesis tracker (Sprint 6 — Premium) |
 | **Tầng 3 — Trade Journal MVP** | ✅ Done Sprint 3 (log/close/PnL/stats — Pro) |
@@ -15,6 +15,9 @@
 | **Export PDF report** | ✅ Done Sprint 4 (`Export PDF`: báo cáo PDF qua pdfkit — summary, monthly bar chart, breakdown ticker/hướng, trade log — Premium) |
 | **Hạ tầng AI** | ✅ Vertex-Key: chat `aws/claude-sonnet-4-6-medium-thinking`, fast `aws/claude-haiku-4-5` |
 | **Local test** | ✅ Bot `@edgebook_bot` chạy được (`npm start`), Trade/Research/Analytics/Export PDF test OK không cần Google. User test set Premium thủ công qua `data/plans.json` |
+| **Bugfix forward** | ✅ 2026-06-01 — sửa nhận diện forward theo `forward_origin` (Bot API 7.0 đã bỏ `forward_date`/`forward_from`); trước đó forward ảnh → bot im lặng, forward text → không lưu research |
+| **Current Doc link** | ✅ 2026-06-01 — lệnh `Current Doc` trả link Google Docs clickable + alias (không chỉ ID) |
+| **Admin accounts** | ✅ 2026-06-01 — `ADMIN_USER_IDS` trong `.env`: các Telegram ID là admin luôn được coi là Premium (mọi gate pass, unlimited forward, luôn digest-eligible). Thay cho việc set tier thủ công trong `data/plans.json` |
 
 > **Tầng 2 (Research Hub / Phase 2) và Tầng 3 (Trade Journal / Phase 3) đều hoàn tất 100%.** Mọi feature monetizable Free/Pro/Premium đã build xong. Việc còn lại là hạ tầng (DB), mở rộng (Phase 4 Team & API), và vận hành (secrets/payment).
 
@@ -30,7 +33,7 @@
 **Đang chờ / TODO vận hành:**
 - `service_account.json` (Google APIs — Save Docs/Calendar/upload ảnh). **Gitignored** → không có khi `git pull`; phải copy thủ công sang từng máy (USB / password manager), KHÔNG commit.
 - `.env` cũng gitignored — copy thủ công. ✅ Đã có `.env.example` document đủ 14 biến + default; chỉ cần `cp .env.example .env` rồi điền giá trị.
-- LemonSqueezy keys (bật `/upgrade`). Khi chưa có → test Premium bằng cách set tier trong `data/plans.json`.
+- LemonSqueezy keys (bật `/upgrade`). Khi chưa có → test Premium bằng cách thêm Telegram ID vào `ADMIN_USER_IDS` trong `.env` (admin luôn = Premium), hoặc set tier thủ công trong `data/plans.json`.
 - ⚠️ Chỉ chạy **1 instance** (long-poll Telegram + JSON file-based, 2 instance sẽ 409 Conflict & hỏng data).
 
 **Sprint kế tiếp (ứng viên):** Migrate JSON→DB (PostgreSQL/Supabase) → Phase 4 (Team & API).
