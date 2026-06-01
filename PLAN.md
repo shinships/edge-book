@@ -325,3 +325,90 @@ CREATE TABLE trades (
 2. **Twitter/X Crypto VN**: Viết content chia sẻ: *"Cách tôi quản lý 200+ nguồn tin crypto mỗi tuần bằng Telegram Bot"*.
 3. **KOL Partnership**: Tặng tài khoản Premium miễn phí cho KOL đổi lấy lượt đề xuất.
 4. **Growth Loop Tự Nhiên**: User chia sẻ các bản Digest chất lượng có đính link cài bot tới các hội nhóm.
+
+---
+
+## 7. Kế hoạch Migration JSON → DB *(🔴 ưu tiên hạ tầng kế tiếp)*
+
+> **Mục tiêu:** gỡ giới hạn "chỉ 1 instance", có persistence bền/transaction, nền tảng cho Phase 4 (Team & API) + web dashboard. Giữ nguyên hành vi bot — đây là refactor hạ tầng, không phải đổi feature.
+
+### 7.1 Stack đề xuất (default)
+
+| Hạng mục | Lựa chọn | Lý do |
+|---|---|---|
+| **DB host** | **Supabase** (managed Postgres) | Free tier ~500MB, có dashboard + REST/Realtime + auth sẵn; tái dùng được cho web dashboard Tầng 3. Connection qua `DATABASE_URL`. |
+| **Query layer** | **Drizzle ORM** | TypeScript-first, nhẹ, SQL-like, type-safe, có `drizzle-kit` cho migration. Ít "magic", hợp schema đơn giản + solo dev. |
+| **Rollout** | **Repository pattern + big-bang** | Tách tầng data-access, chuyển cả 7 service sang async, chạy 1 script seed JSON→DB, test rồi cắt. Dứt điểm, không phải nuôi code dual-write. |
+
+> ⚠️ **Quyết định chưa chốt** (mặc định ở trên, đổi nếu cần): Supabase vs Postgres self-host vs SQLite · Drizzle vs Prisma vs raw `pg`. SQLite **không** gỡ được multi-instance nên không khuyến nghị nếu định scale ngang.
+
+### 7.2 Hiện trạng cần thay (audit codebase)
+
+7 service đều cùng anti-pattern cần bỏ:
+- In-memory `Map<userId, T>` + đọc cả file lúc khởi tạo (`loadData()`), **ghi đè nguyên file mỗi mutation** (`saveData()`).
+- **Toàn bộ method là sync** (return thẳng giá trị) → đây là phần đụng chạm lớn nhất khi chuyển async.
+- `trades`/`theses` đã ghi atomic (tmp+rename); `users`/`todos`/`plans`/`research`/`shopee` ghi trực tiếp (race-prone).
+
+| Service | File JSON | Bảng DB đích | Khóa |
+|---|---|---|---|
+| UserService | `users.json` | `users` | userId (PK) |
+| PlanService | `plans.json` | `plans` | userId (PK) |
+| ResearchService | `research.json` | `research_items` | id (PK), userId (FK) |
+| TradeService | `trades.json` | `trades` | id (PK), userId (FK) |
+| ThesisService | `theses.json` | `theses` | id (PK), userId (FK) |
+| TodoService | `todos.json` | `todos` | id (PK), userId (FK) |
+| ShopeeService | `shopee.json` | `shopee_tracked` | id (PK), userId (FK) |
+
+> Lưu ý mở rộng schema §5: bản dự thảo §5 mới có `users`/`research_items`/`trades`. Cần bổ sung `plans`, `theses`, `todos`, `shopee_tracked` và các cột còn thiếu (vd `plans.ls_order_id`, `users.doc_aliases JSONB`, `research_items.is_starred`, `trades.linked_research`).
+
+### 7.3 Các bước triển khai (theo thứ tự)
+
+1. **Setup hạ tầng**
+   - Tạo project Supabase, lấy `DATABASE_URL` (pooler + direct).
+   - Thêm `DATABASE_URL` (và `DIRECT_URL` nếu cần) vào `.env` + `.env.example` + `config.ts`.
+   - `npm i drizzle-orm postgres` + `npm i -D drizzle-kit`.
+
+2. **Định nghĩa schema** (`src/db/schema.ts`)
+   - Map 1-1 từ 7 interface hiện có (`UserProfile`, `UserPlan`, `ResearchItem`, `TradeItem`, `ThesisItem`, `TodoItem`, `TrackedItem`).
+   - `userId` kiểu `bigint` (Telegram ID). Mảng (`tickers`, `categories`, `linkedResearch`) → `text[]`; `docAliases` → `jsonb`. Timestamp giữ ISO/`timestamptz`.
+   - Sinh migration: `drizzle-kit generate` → `migrate`.
+
+3. **Tầng kết nối** (`src/db/index.ts`)
+   - 1 connection pool dùng chung, export `db`. Đọc `DATABASE_URL` từ config.
+
+4. **Script seed một lần** (`src/scripts/migrate-json-to-db.ts`)
+   - Đọc 7 file trong `data/`, insert vào DB (idempotent: `onConflictDoNothing`/upsert theo PK).
+   - In số bản ghi đã chuyển / bỏ qua để verify. Chạy: `npx ts-node src/scripts/migrate-json-to-db.ts`.
+
+5. **Viết lại 7 service (async)**
+   - Giữ nguyên tên + chữ ký public method, đổi return thành `Promise<...>`.
+   - Bỏ `Map` + `loadData/saveData`; thay bằng query Drizzle. Mutation thành `INSERT/UPDATE/DELETE` đơn dòng (hết cảnh ghi đè cả file).
+   - Logic thuần (auto-tag, sentiment, classify ở ResearchService; tính PnL/analytics ở TradeService) giữ nguyên — chỉ phần I/O đổi.
+
+6. **Cập nhật call site** (`index.ts`, `webhook.server.ts`, cron jobs)
+   - Thêm `await` cho mọi lời gọi service. Handler grammY/webhook vốn đã async → an toàn.
+   - Đặc biệt soát: cron daily digest (08:00), weekly report (CN 18:00), downgrade plan hết hạn, `getAllUserIds()`.
+
+7. **Test & cắt**
+   - `npm run build` pass; chạy bot `@edgebook_bot`, test luồng chính: Save research → tag, Trade open/close → PnL, `Search`/`Digest`/`Weekly Report`/`Thesis`, `/upgrade` webhook set tier.
+   - Verify data khớp giữa JSON cũ và DB.
+   - Sau khi ổn: gỡ `data/*.json` khỏi luồng đọc (giữ file làm backup), cập nhật CLAUDE.md (bỏ cảnh báo "chỉ 1 instance" + mục "No database").
+
+### 7.4 Rủi ro & lưu ý
+
+- **Async ripple:** quên 1 `await` → bug ngầm (so sánh Promise, ghi đè state). Soát kỹ ở §7.3 bước 6; cân nhắc bật ESLint `no-floating-promises`.
+- **`Date.now()`/reset hằng ngày:** logic reset `dailyForwardCount` theo `lastResetDate` (PlanService) chuyển nguyên sang DB, không đổi.
+- **Idempotency thanh toán:** `plans.ls_order_id` phải `UNIQUE` để webhook LemonSqueezy không cộng tier 2 lần.
+- **Multi-instance thật sự đạt được** chỉ khi bỏ hết state in-memory (Map). Nếu giữ cache, phải có invalidation — giai đoạn này nên query thẳng DB cho đơn giản.
+- **Rollback:** giữ `data/*.json` + script seed; nếu lỗi nặng, revert service về bản JSON và chạy lại bot.
+
+### 7.5 Ước lượng
+
+| Khối | Quy mô |
+|---|---|
+| Setup Supabase + Drizzle + schema + connection | Nhỏ |
+| Script seed JSON→DB | Nhỏ |
+| Viết lại 7 service async | Trung bình (phần nặng nhất) |
+| Cập nhật call site + cron + test | Trung bình |
+
+→ Gói gọn 1 sprint hạ tầng ("Sprint 7 — DB Migration"). Sau khi xong mới mở khoá Phase 4 (Team workspace, role-based, Webhook/API).
