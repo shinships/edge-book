@@ -1,5 +1,8 @@
 import dotenv from 'dotenv';
-dotenv.config();
+// override: true → values in .env win over any pre-existing OS environment variables.
+// Needed because an OS-level GOOGLE_APPLICATION_CREDENTIALS would otherwise silently
+// shadow the project's .env and point the bot at a different service account.
+dotenv.config({ override: true });
 
 export const config = {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',

@@ -1,12 +1,24 @@
 import { google } from 'googleapis';
 import { config } from '../config';
 import { Readable } from 'stream';
+import * as fs from 'fs';
+
+/** Error thrown by Docs/Drive calls that carries the HTTP status so callers can craft actionable replies. */
+export class GoogleApiError extends Error {
+    status?: number;
+    constructor(message: string, status?: number) {
+        super(message);
+        this.name = 'GoogleApiError';
+        this.status = status;
+    }
+}
 
 export class GoogleService {
     private auth;
     private calendar;
     private drive;
     private docs;
+    private saEmail: string | null = null;
 
     constructor() {
         this.auth = new google.auth.GoogleAuth({
@@ -21,6 +33,18 @@ export class GoogleService {
         this.calendar = google.calendar({ version: 'v3', auth: this.auth });
         this.drive = google.drive({ version: 'v3', auth: this.auth });
         this.docs = google.docs({ version: 'v1', auth: this.auth });
+    }
+
+    /** The service-account email users must share their Google Docs with (cached). Empty string if unavailable. */
+    getServiceAccountEmail(): string {
+        if (this.saEmail !== null) return this.saEmail;
+        try {
+            const raw = fs.readFileSync(config.googleCredentials, 'utf-8');
+            this.saEmail = JSON.parse(raw).client_email || '';
+        } catch {
+            this.saEmail = '';
+        }
+        return this.saEmail || '';
     }
 
     async createCalendarEvent(eventData: { title: string; startTime: string; endTime?: string; description?: string }) {
@@ -111,9 +135,9 @@ export class GoogleService {
                 requestBody: { requests },
             });
             return true;
-        } catch (error) {
+        } catch (error: any) {
             console.error('Docs Append Error:', error);
-            throw new Error('Failed to append to Google Doc');
+            throw new GoogleApiError('Failed to append to Google Doc', error?.code);
         }
     }
 
@@ -158,7 +182,7 @@ export class GoogleService {
             if (error.response) {
                 console.error('Docs Error Details:', JSON.stringify(error.response.data, null, 2));
             }
-            throw new Error('Failed to insert image to Google Doc');
+            throw new GoogleApiError('Failed to insert image to Google Doc', error?.code);
         }
     }
 }
