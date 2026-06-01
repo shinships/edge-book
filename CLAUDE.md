@@ -30,7 +30,6 @@ edge-book/
 ├── tsconfig.json
 ├── nodemon.json
 ├── PLAN.md                     # Product & monetization roadmap
-├── SHOPEE_PLAN.md              # Shopee tracker feature notes
 ├── data/
 │   ├── users.json              # Persisted user profiles & doc aliases
 │   ├── todos.json              # Persisted to-do items (created at runtime)
@@ -48,7 +47,6 @@ edge-book/
 │   │   ├── plan.service.ts     # Subscription tier tracking & feature gating
 │   │   ├── report.service.ts   # PDF trade report generation via pdfkit (Premium export)
 │   │   ├── research.service.ts # Research items: auto-tagging, search, star, digest data
-│   │   ├── shopee.service.ts   # Shopee price tracker & flash sale notifier
 │   │   ├── thesis.service.ts   # Thesis tracker: record theses + conflict detection vs research sentiment (Premium)
 │   │   ├── todo.service.ts     # File-based to-do CRUD per user
 │   │   ├── trade.service.ts    # Trade Journal: open/close trades, PnL calc, stats, analytics (Pro/Premium)
@@ -112,10 +110,6 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
 
 1. **Doc management**: `Add Doc <alias> <id>`, `Use Doc <alias>`, `Current Doc` (replies with the active doc's alias + ID + a clickable `docs.google.com` link; falls back to `GOOGLE_DOC_ID` default)
 2. **To-Do List**: Quick task management via `Add Task: [content]` and `List Tasks`.
-   - **Shopee Tracker**: Monitor prices and get alerted before Flash Sales. Commands:
-   - `Track Shopee <link>` or `Theo dõi <link>`
-   - `/shopee` or `shopee list`
-   - `Untrack Shopee <index>`
 3. **Research OS commands** (new):
    - `Search: <keyword>` — full-text search in saved research (Pro)
    - `Tag: <ticker>` — filter by ticker symbol (Pro)

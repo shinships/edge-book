@@ -264,7 +264,7 @@ export class PlanService {
         info += `📄 Export: ${limits.canExport ? '✅' : '🔒 Premium'}`;
 
         if (admin) {
-            info += `\n♾️ Quyền admin — không giới hạn thời gian`;
+            info += `\n♾️ Quyền admin: không giới hạn thời gian`;
         } else if (plan.expiresAt) {
             const expDate = new Date(plan.expiresAt).toLocaleDateString('vi-VN');
             info += `\n⏰ Hết hạn: ${expDate}`;

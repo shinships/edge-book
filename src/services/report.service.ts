@@ -148,7 +148,7 @@ export class ReportService {
             doc.switchToPage(i);
             doc.fontSize(8).fillColor(COLORS.muted).font('Helvetica')
                 .text(
-                    `EdgeBook — capture your edge.   Page ${i - range.start + 1} of ${range.count}`,
+                    `EdgeBook · capture your edge.   Page ${i - range.start + 1} of ${range.count}`,
                     left, doc.page.height - 35, { width: contentWidth, align: 'center' }
                 );
         }

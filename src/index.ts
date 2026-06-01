@@ -4,7 +4,6 @@ import { AIService } from './services/ai.service';
 import { GoogleService } from './services/google.service';
 import { UserService } from './services/user.service';
 import { TodoService } from './services/todo.service';
-import { ShopeeService } from './services/shopee.service';
 import { ResearchService } from './services/research.service';
 import { PlanService } from './services/plan.service';
 import { PaymentService } from './services/payment.service';
@@ -21,7 +20,6 @@ const aiService = new AIService();
 const googleService = new GoogleService();
 const todoService = new TodoService();
 const userService = new UserService();
-const shopeeService = new ShopeeService(bot);
 const researchService = new ResearchService();
 const planService = new PlanService(config.adminUserIds);
 const paymentService = new PaymentService(planService);
@@ -129,51 +127,53 @@ function getForwardSource(message: any): string | undefined {
 }
 
 // Basic Command Handlers
-bot.command('start', (ctx) => ctx.reply('👋 Welcome to EdgeBook — capture your edge.\nYour trading research OS, right inside Telegram. How can I help you?'));
+bot.command('start', (ctx) => ctx.reply(
+    '👋 EdgeBook · capture your edge.\n' +
+    'Research OS cho trader, sống ngay trong Telegram.\n' +
+    '\n' +
+    '✨ Nổi bật:\n' +
+    '📥 Forward tin → tự gắn tag ticker, chấm sentiment & lưu Docs\n' +
+    '📊 Daily Digest + Weekly Report tổng hợp research bằng AI\n' +
+    '🔍 Search & Ask: hỏi AI ngay trên kho research của bạn\n' +
+    '📈 Trade Journal: log lệnh, tính PnL, win rate, analytics\n' +
+    '🧠 Thesis tracker: cảnh báo khi tin mới mâu thuẫn luận điểm\n' +
+    '\n' +
+    'Gõ /help để xem tất cả lệnh.'
+));
 
 bot.command('help', (ctx) => {
     ctx.reply(
-        '📓 EdgeBook — capture your edge.\n\n' +
-        'I can help you with:\n' +
-        '- Chat & Q&A (AI)\n' +
-        '- Personalization: "Call me [Name]", "My job is [Job]"\n' +
-        '- Docs Management:\n' +
-        '  + "Add Doc [Name] [ID]"\n' +
-        '  + "Use Doc [Name]"\n' +
-        '  + "Current Doc"\n' +
-        '- Scheduling (Type: "Remind me...")\n' +
-        '- To-Do List:\n' +
-        '  + "Add Task: <content>"\n' +
-        '  + "List Tasks" (view list)\n' +
-        '  + "Complete Task: <index or keyword>"\n' +
-        '- Save Notes (Type: "Save: <content>" or Forward message -> Docs)\n' +
-        '- Save Photos (Send photo with caption "Save" or Forward photo -> Docs)\n' +
-        '- Shopee Tracker:\n' +
-        '  + "Track Shopee <link>" (Theo dõi giá/deal)\n' +
-        '  + "/shopee" (Xem danh sách)\n' +
-        '  + "Untrack Shopee <số thứ tự>"\n' +
-        '\n📊 Research OS:\n' +
-        '  + Forward messages → auto-tag tickers\n' +
-        '  + "Search: <keyword>" — tìm research\n' +
-        '  + "Tag: <ticker>" — xem theo ticker\n' +
-        '  + "Digest" — xem daily digest\n' +
-        '  + "Weekly Report" — báo cáo tuần + sentiment shift (Pro)\n' +
-        '  + "Stats" — thống kê research\n' +
-        '  + "Starred" — xem bookmarks\n' +
-        '  + "Ask: <question>" — hỏi AI về research\n' +
-        '  + "Thesis: <ticker> <bullish|bearish> <luận điểm>" (Premium) — ghi thesis, nhắc khi có tin mâu thuẫn\n' +
-        '  + "Theses" / "Close Thesis: <số>" — xem/đóng thesis\n' +
-        '  + "/plan" — xem plan hiện tại\n' +
-        '\n📈 Trade Journal (Pro):\n' +
-        '  + "Trade: Long BTC entry 108k SL 105k TP 115k" — mở lệnh\n' +
-        '  + "Close: BTC 112k" hoặc "Close: BTC +3.2%" — đóng lệnh\n' +
-        '  + "Trades" — xem nhật ký giao dịch\n' +
-        '  + "Trade Stats" — thống kê win rate, PnL, RR\n' +
-        '  + "Trade Analytics" (Premium) — breakdown ticker/hướng/tháng + AI insight\n' +
-        '  + "Export PDF" (Premium) — xuất báo cáo giao dịch PDF\n' +
-        '  + Khi đóng lệnh (Premium): chọn research để link 🔗\n' +
-        '\n💳 Subscription:\n' +
-        '  + "/upgrade" — nâng cấp lên Pro/Premium'
+        '📓 EdgeBook · các lệnh chính\n' +
+        '\n' +
+        '💬 Chat & cá nhân hoá\n' +
+        '• Nhắn bất kỳ để hỏi AI\n' +
+        '• Call me [tên] · My job is [nghề]\n' +
+        '\n' +
+        '📂 Docs\n' +
+        '• Add Doc [tên] [ID] · Use Doc [tên] · Current Doc\n' +
+        '\n' +
+        '💾 Lưu nội dung\n' +
+        '• Save: [nội dung], hoặc forward tin/ảnh → lưu Docs\n' +
+        '\n' +
+        '✅ To-Do & lịch\n' +
+        '• Add Task: [việc] · List Tasks · Complete Task: [số]\n' +
+        '• Remind me… → tạo nhắc lịch\n' +
+        '\n' +
+        '📊 Research OS (Pro)\n' +
+        '• Forward tin → tự gắn tag ticker\n' +
+        '• Search: · Tag: · Digest · Weekly Report · Ask:\n' +
+        '• Stats · Starred\n' +
+        '• Thesis: [ticker] [bullish|bearish] [ý] → cảnh báo tin mâu thuẫn (Premium)\n' +
+        '• Theses · Close Thesis: [số]\n' +
+        '\n' +
+        '📈 Trade Journal (Pro)\n' +
+        '• Trade: Long BTC entry 108k SL 105k TP 115k → mở lệnh\n' +
+        '• Close: BTC 112k · Close: BTC +3.2% → đóng lệnh\n' +
+        '• Trades · Trade Stats\n' +
+        '• Trade Analytics · Export PDF (Premium)\n' +
+        '\n' +
+        '💳 Tài khoản\n' +
+        '• /plan · /upgrade'
     );
 });
 
@@ -208,7 +208,7 @@ bot.on('message:text', async (ctx) => {
         if (userService.setActiveDoc(userId, alias)) {
             await ctx.reply(`✅ Switched to Doc: ${alias}`);
         } else {
-            await ctx.reply(`⚠️ Doc "${alias}" not found. Use "Add Doc" first.`);
+            await ctx.reply(`⚠️ Doc "${alias}" not found. Use Add Doc first.`);
         }
         return;
     }
@@ -229,7 +229,7 @@ bot.on('message:text', async (ctx) => {
                 { link_preview_options: { is_disabled: true } }
             );
         } else {
-            await ctx.reply('📂 No Doc configured yet. Use "Add Doc [name] [ID]" to add one.');
+            await ctx.reply('📂 No Doc configured yet. Use Add Doc [name] [ID] to add one.');
         }
         return;
     }
@@ -270,41 +270,6 @@ bot.on('message:text', async (ctx) => {
         }
     }
     // ---------------------------
-
-    // --- SHOPEE TRACKER COMMANDS ---
-    const trackMatch = text.match(/^(?:track shopee|theo dõi)\s+(https?:\/\/\S+)/i);
-    if (trackMatch) {
-        const url = trackMatch[1];
-        const response = await shopeeService.trackItem(userId, url);
-        await ctx.reply(response, { parse_mode: 'Markdown' });
-        return;
-    }
-
-    if (text.toLowerCase() === '/shopee' || text.toLowerCase() === 'shopee list') {
-        const items = shopeeService.getTrackedItems(userId);
-        if (items.length === 0) {
-            await ctx.reply('Bạn chưa theo dõi sản phẩm Shopee nào.');
-        } else {
-            const list = items.map((i, idx) => {
-                const price = i.lastPrice ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(i.lastPrice) : 'N/A';
-                return `${idx + 1}. [${i.name}](${i.url}) - ${price}`;
-            }).join('\n');
-            await ctx.reply(`Danh sách theo dõi Shopee:\n${list}`, { parse_mode: 'Markdown', link_preview_options: { is_disabled: true } });
-        }
-        return;
-    }
-
-    const untrackMatch = text.match(/^untrack shopee\s+(\d+)/i);
-    if (untrackMatch) {
-        const index = parseInt(untrackMatch[1]);
-        if (shopeeService.untrackItem(userId, index)) {
-            await ctx.reply(`✅ Đã xóa sản phẩm số ${index} khỏi danh sách theo dõi.`);
-        } else {
-            await ctx.reply('⚠️ Số thứ tự không hợp lệ. Vui lòng xem lại danh sách bằng lệnh /shopee.');
-        }
-        return;
-    }
-    // -------------------------------
 
     // --- RESEARCH OS COMMANDS ---
 
@@ -362,7 +327,7 @@ bot.on('message:text', async (ctx) => {
                 const source = item.sourceName ? ` (${item.sourceName})` : '';
                 return `${star}${sentiment} ${idx + 1}. ${date}${source}\n   ${item.content.substring(0, 150)}${item.content.length > 150 ? '...' : ''}`;
             }).join('\n\n');
-            await ctx.reply(`🏷️ ${ticker} — ${results.length} research items:\n\n${display}`);
+            await ctx.reply(`🏷️ ${ticker}: ${results.length} research items:\n\n${display}`);
         }
         return;
     }
@@ -423,7 +388,7 @@ bot.on('message:text', async (ctx) => {
     if (text.toLowerCase() === 'starred' || text.toLowerCase() === 'bookmarks') {
         const starred = researchService.getStarredItems(userId);
         if (starred.length === 0) {
-            await ctx.reply('⭐ Chưa có bookmark nào. Reply ⭐ hoặc gõ "Star" để bookmark research gần nhất.');
+            await ctx.reply('⭐ Chưa có bookmark nào. Reply ⭐ hoặc gõ Star để bookmark research gần nhất.');
             return;
         }
 
@@ -483,12 +448,12 @@ bot.on('message:text', async (ctx) => {
         }
         const selector = text.slice(text.indexOf(':') + 1).trim();
         if (!selector) {
-            await ctx.reply('⚠️ Cú pháp: Close Thesis: <số thứ tự hoặc ticker>. Gõ "Theses" để xem danh sách.');
+            await ctx.reply('⚠️ Cú pháp: Close Thesis: <số thứ tự hoặc ticker>. Gõ Theses để xem danh sách.');
             return;
         }
         const closed = thesisService.closeThesis(userId, selector);
         if (!closed) {
-            await ctx.reply(`⚠️ Không tìm thấy thesis "${selector}". Gõ "Theses" để xem danh sách.`);
+            await ctx.reply(`⚠️ Không tìm thấy thesis "${selector}". Gõ Theses để xem danh sách.`);
             return;
         }
         const e = closed.stance === 'bullish' ? '📈' : '📉';
@@ -586,7 +551,7 @@ bot.on('message:text', async (ctx) => {
             takeProfit: tp,
         });
         if (!trade) {
-            await ctx.reply('⚠️ Không thể mở lệnh — giá không hợp lệ.');
+            await ctx.reply('⚠️ Không thể mở lệnh: giá không hợp lệ.');
             return;
         }
         const dirEmoji = direction === 'long' ? '🟢' : '🔴';
@@ -599,7 +564,7 @@ bot.on('message:text', async (ctx) => {
             `Entry: ${formatPrice(trade.entryPrice)}` +
             (trade.stopLoss !== undefined ? `\nSL: ${formatPrice(trade.stopLoss)}` : '') +
             (trade.takeProfit !== undefined ? `\nTP: ${formatPrice(trade.takeProfit)}` : '') +
-            (reversed ? '\n⚠️ SL/TP ngược chiều với hướng lệnh — sẽ không tính RR.' : '')
+            (reversed ? '\n⚠️ SL/TP ngược chiều với hướng lệnh, sẽ không tính RR.' : '')
         );
         return;
     }
@@ -920,7 +885,7 @@ bot.on('message:text', async (ctx) => {
                         const e = t.stance === 'bullish' ? '📈' : '📉';
                         return `${e} ${t.ticker} (${t.stance}): "${t.text}"`;
                     }).join('\n') +
-                    `\n\nTin vừa lưu ${sEmoji} sentiment ${sVal} — ngược hướng thesis. Xem lại? Gõ "Theses".`;
+                    `\n\nTin vừa lưu ${sEmoji} sentiment ${sVal}, ngược hướng thesis. Xem lại? Gõ Theses.`;
             }
         }
 
@@ -955,7 +920,7 @@ bot.on('message:text', async (ctx) => {
             }
         } else {
             // No Google Doc configured — still save to research
-            await ctx.reply(`✅ Research saved!${tagInfo}${catInfo}${sentimentInfo}\n💡 Tip: "Add Doc [name] [ID]" để sync với Google Docs.`);
+            await ctx.reply(`✅ Research saved!${tagInfo}${catInfo}${sentimentInfo}\n💡 Tip: Add Doc [name] [ID] để sync với Google Docs.`);
         }
 
         // Show remaining quota for free users
@@ -1125,14 +1090,14 @@ bot.command('upgrade', async (ctx) => {
     }
 
     if (plan.tier === 'premium') {
-        await ctx.reply('💎 Bạn đang dùng Premium — plan cao nhất! Cảm ơn đã ủng hộ 🙏');
+        await ctx.reply('💎 Bạn đang dùng Premium, plan cao nhất! Cảm ơn đã ủng hộ 🙏');
         return;
     }
 
     const keyboard = new InlineKeyboard()
-        .text('⭐ Pro — $9.99/tháng', 'upgrade_pro')
+        .text('⭐ Pro · $9.99/tháng', 'upgrade_pro')
         .row()
-        .text('💎 Premium — $24.99/tháng', 'upgrade_premium');
+        .text('💎 Premium · $24.99/tháng', 'upgrade_premium');
 
     const currentTierText = plan.tier === 'pro'
         ? 'Bạn đang dùng ⭐ Pro. Upgrade lên 💎 Premium để mở khoá Sentiment & Export.'
@@ -1222,14 +1187,28 @@ bot.callbackQuery(/^linkres_skip:.+$/, async (ctx) => {
     await ctx.editMessageText('👍 Đã bỏ qua link research.');
 });
 
+// Slash commands shown in Telegram's command menu (the list that pops up on "/").
+const BOT_COMMANDS = [
+    { command: 'start', description: '👋 Khởi động & giới thiệu EdgeBook' },
+    { command: 'help', description: '📓 Hướng dẫn sử dụng & danh sách lệnh' },
+    { command: 'plan', description: '💳 Xem gói hiện tại & giới hạn' },
+    { command: 'upgrade', description: '⭐ Nâng cấp Pro / Premium' },
+];
+
 // Start webhook server (runs alongside bot polling)
 startWebhookServer(paymentService, bot);
 
 // Start the bot
 bot.start({
-    onStart: (botInfo) => {
+    onStart: async (botInfo) => {
         console.log(`EdgeBook bot @${botInfo.username} started!`);
         console.log('EdgeBook features enabled: auto-tag, search, digest, star, stats, trade journal');
         console.log('Payment: /upgrade command enabled' + (config.lsApiKey ? '' : ' (⚠️ LS keys not set)'));
+        try {
+            await bot.api.setMyCommands(BOT_COMMANDS);
+            console.log(`Registered ${BOT_COMMANDS.length} bot commands in the "/" menu.`);
+        } catch (e) {
+            console.error('Failed to register bot commands:', e);
+        }
     },
 });

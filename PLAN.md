@@ -7,7 +7,7 @@
 | Hạng mục | Trạng thái |
 |---|---|
 | **Brand** | ✅ Rebrand "Bot Forward Docs" → **EdgeBook** (repo `shincapitals/edge-book`, npm `edgebook`, bot `@edgebook_bot` — token đã trỏ đúng bot, chạy live) |
-| **Tầng 1 — Capture Engine** | ✅ Done (forward → Docs, AI chat, Calendar, To-Do, Shopee) |
+| **Tầng 1 — Capture Engine** | ✅ Done (forward → Docs, AI chat, Calendar, To-Do) |
 | **Tầng 2 — Research Hub** | ✅ **Hoàn tất 100%** — Sprint 1 (auto-tag, search, sentiment, daily digest, Ask AI) + Weekly Report (Sprint 5 — Pro) + Thesis tracker (Sprint 6 — Premium) |
 | **Tầng 3 — Trade Journal MVP** | ✅ Done Sprint 3 (log/close/PnL/stats — Pro) |
 | **Research-to-trade link** | ✅ Done Sprint 4 (close lệnh → gợi ý research khớp ticker để link 🔗 — Premium) |
@@ -83,7 +83,6 @@ graph LR
 - Forward text/photo → Google Docs
 - AI chat cơ bản
 - Calendar, To-Do
-- Track giá Shopee (tính năng phụ thêm)
 
 ### Tầng 2 — Research Hub *(đã hoàn thành Sprint 1)*
 - Auto-tagging ticker/pair (BTC, ETH, SOL...)
@@ -347,10 +346,10 @@ CREATE TABLE trades (
 
 ### 7.2 Hiện trạng cần thay (audit codebase)
 
-7 service đều cùng anti-pattern cần bỏ:
+6 service đều cùng anti-pattern cần bỏ:
 - In-memory `Map<userId, T>` + đọc cả file lúc khởi tạo (`loadData()`), **ghi đè nguyên file mỗi mutation** (`saveData()`).
 - **Toàn bộ method là sync** (return thẳng giá trị) → đây là phần đụng chạm lớn nhất khi chuyển async.
-- `trades`/`theses` đã ghi atomic (tmp+rename); `users`/`todos`/`plans`/`research`/`shopee` ghi trực tiếp (race-prone).
+- `trades`/`theses` đã ghi atomic (tmp+rename); `users`/`todos`/`plans`/`research` ghi trực tiếp (race-prone).
 
 | Service | File JSON | Bảng DB đích | Khóa |
 |---|---|---|---|
@@ -360,9 +359,8 @@ CREATE TABLE trades (
 | TradeService | `trades.json` | `trades` | id (PK), userId (FK) |
 | ThesisService | `theses.json` | `theses` | id (PK), userId (FK) |
 | TodoService | `todos.json` | `todos` | id (PK), userId (FK) |
-| ShopeeService | `shopee.json` | `shopee_tracked` | id (PK), userId (FK) |
 
-> Lưu ý mở rộng schema §5: bản dự thảo §5 mới có `users`/`research_items`/`trades`. Cần bổ sung `plans`, `theses`, `todos`, `shopee_tracked` và các cột còn thiếu (vd `plans.ls_order_id`, `users.doc_aliases JSONB`, `research_items.is_starred`, `trades.linked_research`).
+> Lưu ý mở rộng schema §5: bản dự thảo §5 mới có `users`/`research_items`/`trades`. Cần bổ sung `plans`, `theses`, `todos` và các cột còn thiếu (vd `plans.ls_order_id`, `users.doc_aliases JSONB`, `research_items.is_starred`, `trades.linked_research`).
 
 ### 7.3 Các bước triển khai (theo thứ tự)
 
