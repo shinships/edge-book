@@ -30,6 +30,11 @@ edge-book/
 ├── tsconfig.json
 ├── nodemon.json
 ├── PLAN.md                     # Product & monetization roadmap
+├── service-entry.js            # Stable launcher for the Windows Service (requires ./dist/index.js)
+├── scripts/
+│   ├── service-install.js      # Install + start the "EdgeBookBot" Windows Service (elevated)
+│   └── service-uninstall.js    # Stop + remove the service (elevated)
+├── daemon/                     # node-windows winsw exe/config/logs (gitignored, created on install)
 ├── data/
 │   ├── users.json              # Persisted user profiles & doc aliases
 │   ├── todos.json              # Persisted to-do items (created at runtime)
@@ -77,7 +82,23 @@ npm start
 npx ts-node src/test-ai.ts
 npx ts-node src/test-calendar.ts
 npx ts-node src/test-drive.ts
+
+# Windows Service (run in background + on boot) — run from an ELEVATED shell
+npm run build              # ensure dist/ is fresh first
+npm run service:install    # install + start the "EdgeBookBot" service
+npm run service:uninstall  # stop + remove the service
 ```
+
+### Running as a Windows Service
+
+EdgeBook can run as a background Windows service (auto-start on boot, auto-restart on crash) via **`node-windows`** (winsw under the hood).
+
+- **Scripts**: `scripts/service-install.js` / `scripts/service-uninstall.js`, exposed as `npm run service:install` / `service:uninstall`. Service name: **`EdgeBookBot`**.
+- **Stable launcher**: the service points at `service-entry.js` (project root), which just `require('./dist/index.js')`. This keeps the generated `daemon/` folder (winsw exe + config + logs, gitignored) at the project root instead of inside the rebuildable `dist/`.
+- **Working directory** is set to the project root so `.env` (dotenv) and `GOOGLE_APPLICATION_CREDENTIALS=./service_account.json` resolve correctly.
+- **Requires Administrator**: installing/removing a Windows service needs an elevated shell — `npm run service:install` from a non-admin terminal fails.
+- **⚠️ One instance only**: Telegram long-polling allows a single `getUpdates` consumer. Before installing/starting the service, stop any manually-run bot (`npm start` / `npm run dev`) or Telegram returns 409 Conflict. Likewise, don't `npm start` while the service is running.
+- **Manage**: `services.msc`, or `sc start EdgeBookBot.exe` / `sc stop EdgeBookBot.exe`. Logs land in `daemon/EdgeBookBot.out.log` / `.err.log`.
 
 ## Environment Variables (`.env`)
 
