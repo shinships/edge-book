@@ -8,7 +8,7 @@ export const config = {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     vertexKeyApiKey: process.env.VERTEX_KEY_API_KEY || '',
     vertexKeyBaseUrl: process.env.VERTEX_KEY_BASE_URL || 'https://vertex-key.com/api/v1',
-    chatModel: process.env.AI_CHAT_MODEL || 'aws/claude-sonnet-4-6',   // Dùng cho chat AI
+    chatModel: process.env.AI_CHAT_MODEL || 'aws/claude-sonnet-4-6-medium',   // Dùng cho chat AI
     fastModel: process.env.AI_FAST_MODEL || 'free/claude-haiku-4-5',    // Dùng cho task nhanh
     googleCredentials: process.env.GOOGLE_APPLICATION_CREDENTIALS || '',
     googleDocId: process.env.GOOGLE_DOC_ID || '',
