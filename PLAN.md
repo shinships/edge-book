@@ -13,7 +13,7 @@
 | **Research-to-trade link** | ✅ Done Sprint 4 (close lệnh → gợi ý research khớp ticker để link 🔗 — Premium) |
 | **Performance analytics nâng cao** | ✅ Done Sprint 4 (`Trade Analytics`: breakdown ticker/hướng/tháng + avg hold + AI insight — Premium) |
 | **Export PDF report** | ✅ Done Sprint 4 (`Export PDF`: báo cáo PDF qua pdfkit — summary, monthly bar chart, breakdown ticker/hướng, trade log — Premium) |
-| **Hạ tầng AI** | ✅ Vertex-Key: chat `aws/claude-sonnet-4-6-medium-thinking`, fast `aws/claude-haiku-4-5` |
+| **Hạ tầng AI** | ✅ Vertex-Key: chat `aws/claude-sonnet-4-6-medium`, fast `free/claude-haiku-4-5` (id tier-less `aws/claude-sonnet-4-6` đã bị deprecate, phải chọn effort tier) |
 | **Local test** | ✅ Bot `@edgebook_bot` chạy được (`npm start`), Trade/Research/Analytics/Export PDF test OK không cần Google. User test set Premium thủ công qua `data/plans.json` |
 | **Bugfix forward** | ✅ 2026-06-01 — sửa nhận diện forward theo `forward_origin` (Bot API 7.0 đã bỏ `forward_date`/`forward_from`); trước đó forward ảnh → bot im lặng, forward text → không lưu research |
 | **Current Doc link** | ✅ 2026-06-01 — lệnh `Current Doc` trả link Google Docs clickable + alias (không chỉ ID) |

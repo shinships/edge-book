@@ -13,7 +13,7 @@
 | ------------ | --------------------------------------------- |
 | Runtime      | Node.js + TypeScript (ES2022, CommonJS)       |
 | Bot Framework| grammY v1.20                                  |
-| AI           | Vertex-Key.com (`openai` SDK) via OpenAI-compatible API — chat `AI_CHAT_MODEL` (default `aws/claude-sonnet-4-6`), fast `AI_FAST_MODEL` (default `aws/claude-haiku-4-5`) |
+| AI           | Vertex-Key.com (`openai` SDK) via OpenAI-compatible API — chat `AI_CHAT_MODEL` (default `aws/claude-sonnet-4-6-medium`), fast `AI_FAST_MODEL` (default `free/claude-haiku-4-5`) |
 | Google APIs  | `googleapis` (Calendar v3, Drive v3, Docs v1) |
 | PDF          | `pdfkit` — trade report export (ASCII/English text; built-in fonts can't render VN diacritics) |
 | Auth         | Google Service Account (`service_account.json`) |
@@ -86,8 +86,8 @@ npx ts-node src/test-drive.ts
 | `TELEGRAM_BOT_TOKEN`          | ✅       | Telegram Bot API token                   |
 | `VERTEX_KEY_API_KEY`          | ✅       | API key from vertex-key.com              |
 | `VERTEX_KEY_BASE_URL`         | Optional | API base URL (default: `https://vertex-key.com/api/v1`) |
-| `AI_CHAT_MODEL`               | Optional | Chat model ID (default: `aws/claude-sonnet-4-6`) |
-| `AI_FAST_MODEL`               | Optional | Fast model ID (default: `aws/claude-haiku-4-5`) |
+| `AI_CHAT_MODEL`               | Optional | Chat model ID (default: `aws/claude-sonnet-4-6-medium`) |
+| `AI_FAST_MODEL`               | Optional | Fast model ID (default: `free/claude-haiku-4-5`) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | ✅    | Path to Service Account JSON file        |
 | `GOOGLE_DOC_ID`               | Optional | Default Google Doc ID for saving content |
 | `GOOGLE_DRIVE_FOLDER_ID`      | Optional | Drive folder for photo uploads           |
@@ -238,8 +238,9 @@ Dự án dùng hai AI agent với vai trò tách biệt:
 3. Ensure Service Account has permissions on the target resource.
 
 ### Changing the AI model
-- Two models, both set in `.env`: `AI_CHAT_MODEL` (smart chat / digests / Q&A, default `aws/claude-sonnet-4-6`) and `AI_FAST_MODEL` (fast extraction tasks, default `aws/claude-haiku-4-5`). Read in `config.ts` as `chatModel` / `fastModel`.
-- Uses Vertex-Key.com prefix format: `aws/claude-opus-4-7`, `aws/claude-sonnet-4-6`, `aws/qwen3-codex`, etc.
+- Two models, both set in `.env`: `AI_CHAT_MODEL` (smart chat / Q&A / weekly report / trade analytics, default `aws/claude-sonnet-4-6-medium`) and `AI_FAST_MODEL` (calendar extraction + daily digest, default `free/claude-haiku-4-5`). Read in `config.ts` as `chatModel` / `fastModel`.
+- Uses Vertex-Key.com prefix format: `aws/claude-opus-4-7`, `aws/claude-sonnet-4-6-medium`, `free/claude-haiku-4-5`, `aws/qwen3-codex`, etc.
+- ⚠️ Vertex-Key deprecated the tier-less `aws/claude-sonnet-4-6` id (returns 400 "no longer available — pick an explicit effort tier"). Sonnet must carry a tier (`-medium`/`-high`); Haiku is available under both `aws/` and the newer `free/` prefix.
 - Change in `.env` — no code changes needed.
 
 ### Modifying user profile fields
