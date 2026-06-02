@@ -40,7 +40,8 @@ edge-book/
 │   ├── todos.json              # Persisted to-do items (created at runtime)
 │   ├── research.json           # Research items with tags, sentiment (created at runtime)
 │   ├── plans.json              # User subscription plans (created at runtime)
-│   └── trades.json             # Trade Journal entries per user (created at runtime)
+│   ├── trades.json             # Trade Journal entries per user (created at runtime)
+│   └── theses.json             # Thesis tracker entries per user (created at runtime)
 ├── src/
 │   ├── config.ts               # Loads env vars, validates required keys
 │   ├── index.ts                # Entry point — bot commands, message handlers, cron jobs
@@ -56,7 +57,6 @@ edge-book/
 │   │   ├── todo.service.ts     # File-based to-do CRUD per user
 │   │   ├── trade.service.ts    # Trade Journal: open/close trades, PnL calc, stats, analytics (Pro/Premium)
 │   │   └── user.service.ts     # File-based user profile management & doc aliases
-│   ├── utils/                  # (empty — reserved for future utilities)
 │   ├── test-ai.ts              # Manual test: verify Vertex-Key API connection
 │   ├── test-calendar.ts        # Manual test: create calendar event
 │   └── test-drive.ts           # Manual test: upload file to Drive
@@ -200,7 +200,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 1. Gathers research items from the last 24 hours per user
 2. Groups by ticker, calculates sentiment
 3. Generates AI-powered summary via `AIService.generateDigest()`
-4. Sends formatted digest to each eligible user via Telegram
+4. Sends formatted digest to every user who has research items in that window (Pro/Premium users are always included; free users are included if they have research)
 5. Checks and downgrades expired subscription plans
 
 **Weekly Report** — a `node-cron` job runs at **18:00 every Sunday (Asia/Ho_Chi_Minh)** that, for each digest-eligible (Pro/Premium) user with research in the last 7 days, builds `getWeeklyReportData()` and sends an AI report (`AIService.generateWeeklyReport()`) highlighting per-ticker sentiment shift vs the previous week.

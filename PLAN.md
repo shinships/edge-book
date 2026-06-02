@@ -6,7 +6,7 @@
 
 | Hạng mục | Trạng thái |
 |---|---|
-| **Brand** | ✅ Rebrand "Bot Forward Docs" → **EdgeBook** (repo `shincapitals/edge-book`, npm `edgebook`, bot `@edgebook_bot` — token đã trỏ đúng bot, chạy live) |
+| **Brand** | ✅ Rebrand "Bot Forward Docs" → **EdgeBook** (repo `shinships/edge-book`, npm `edgebook`, bot `@edgebook_bot` — token đã trỏ đúng bot, chạy live) |
 | **Tầng 1 — Capture Engine** | ✅ Done (forward → Docs, AI chat, Calendar, To-Do) |
 | **Tầng 2 — Research Hub** | ✅ **Hoàn tất 100%** — Sprint 1 (auto-tag, search, sentiment, daily digest, Ask AI) + Weekly Report (Sprint 5 — Pro) + Thesis tracker (Sprint 6 — Premium) |
 | **Tầng 3 — Trade Journal MVP** | ✅ Done Sprint 3 (log/close/PnL/stats — Pro) |
