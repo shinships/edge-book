@@ -2,7 +2,7 @@
 
 > **Brand: EdgeBook** — *"capture your edge."* Trading research OS sống trong Telegram.
 
-## 0. Trạng thái hiện tại *(cập nhật 2026-06-01)*
+## 0. Trạng thái hiện tại *(cập nhật 2026-06-03)*
 
 | Hạng mục | Trạng thái |
 |---|---|
@@ -21,25 +21,28 @@
 | **Command menu** | ✅ 2026-06-01 — đăng ký menu "/" qua `setMyCommands` lúc khởi động (`/start`, `/help`, `/plan`, `/upgrade`) |
 | **UX text** | ✅ 2026-06-01 — Việt hoá + làm gọn `/start` (kèm highlight tính năng) & `/help`; dọn định dạng reply (bỏ `—` và ngoặc kép quanh token lệnh, giữ ngoặc quanh giá trị user) |
 | **Gỡ Shopee** | ✅ 2026-06-01 — xoá hẳn Shopee tracker (service + handlers + menu + docs) do dự án tập trung vào trading research/OS |
+| **Sprint 7 — Migrate JSON → DB** | ✅ 2026-06-03 — Drizzle ORM + PostgreSQL/Supabase: schema 6 bảng, rewrite 6 services sang async, seed script, drizzle.config.ts, npm scripts `db:push/generate/migrate/seed`. Gỡ giới hạn "chỉ 1 instance". |
 
-> **Tầng 2 (Research Hub / Phase 2) và Tầng 3 (Trade Journal / Phase 3) đều hoàn tất 100%.** Mọi feature monetizable Free/Pro/Premium đã build xong. Việc còn lại là hạ tầng (DB), mở rộng (Phase 4 Team & API), và vận hành (secrets/payment).
+> **Tầng 2 (Research Hub / Phase 2) và Tầng 3 (Trade Journal / Phase 3) đều hoàn tất 100%.** Sprint 7 (DB Migration) hoàn tất — persistence đã chuyển sang PostgreSQL/Supabase. Việc còn lại: cấu hình `DATABASE_URL` + `db:push` trên máy thật, rồi mở Phase 4 (Team & API).
 
 ### Roadmap còn lại
 | Hạng mục | Loại | Ưu tiên |
 |---|---|---|
-| Migrate JSON → DB (PostgreSQL/Supabase) | Hạ tầng | 🔴 Cao — gỡ giới hạn "1 instance", nền tảng cho Phase 4 |
-| Phase 4 — Team workspace, role-based, Webhook/API, Discord/X bridge | Feature lớn | 🟡 Sau DB |
+| ~~Migrate JSON → DB (PostgreSQL/Supabase)~~ | ~~Hạ tầng~~ | ✅ Done Sprint 7 |
+| Cấu hình DB thật: tạo Supabase project, `DATABASE_URL` → `npm run db:push` | Vận hành | 🔴 Cần làm trước khi chạy bot với DB |
+| Phase 4 — Team workspace, role-based, Webhook/API, Discord/X bridge | Feature lớn | 🟡 Sau khi DB đã live |
 | Tầng 3 vision — multi-source aggregation, portfolio/PnL linkage, web dashboard (Next.js) | Feature lớn | 🟢 Dài hạn |
 | Go-to-Market (§6 — seed groups, content, KOL) | Tăng trưởng | 🟡 Song song |
 | `service_account.json`, LemonSqueezy keys | Vận hành | 🔴 Blocker để chạy thật (`.env.example` ✅ đã có) |
 
 **Đang chờ / TODO vận hành:**
-- `service_account.json` (Google APIs — Save Docs/Calendar/upload ảnh). **Gitignored** → không có khi `git pull`; phải copy thủ công sang từng máy (USB / password manager), KHÔNG commit.
-- `.env` cũng gitignored — copy thủ công. ✅ Đã có `.env.example` document đủ 14 biến + default; chỉ cần `cp .env.example .env` rồi điền giá trị.
-- LemonSqueezy keys (bật `/upgrade`). Khi chưa có → test Premium bằng cách thêm Telegram ID vào `ADMIN_USER_IDS` trong `.env` (admin luôn = Premium), hoặc set tier thủ công trong `data/plans.json`.
-- ⚠️ Chỉ chạy **1 instance** (long-poll Telegram + JSON file-based, 2 instance sẽ 409 Conflict & hỏng data).
+- `DATABASE_URL` — tạo project Supabase, lấy connection string (pooler), thêm vào `.env`, chạy `npm run db:push` để tạo schema, `npm run db:seed` để migrate data JSON cũ (nếu có).
+- `service_account.json` (Google APIs — Save Docs/Calendar/upload ảnh). **Gitignored** → phải copy thủ công, KHÔNG commit.
+- `.env` cũng gitignored. ✅ Đã có `.env.example` với đủ 15 biến; chỉ cần `cp .env.example .env` rồi điền.
+- LemonSqueezy keys (bật `/upgrade`). Khi chưa có → test Premium bằng `ADMIN_USER_IDS` trong `.env`.
+- ✅ Multi-instance: sau khi chuyển sang PostgreSQL, giới hạn "chỉ 1 instance" đã được gỡ (không còn JSON race condition).
 
-**Sprint kế tiếp (ứng viên):** Migrate JSON→DB (PostgreSQL/Supabase) → Phase 4 (Team & API).
+**Sprint kế tiếp (ứng viên):** Phase 4 — Team workspace, role-based access, Webhook/API.
 
 ---
 
