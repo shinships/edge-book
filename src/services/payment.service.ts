@@ -173,14 +173,14 @@ export class PaymentService {
         }
 
         // Idempotency check — skip if this order was already processed
-        const currentPlan = this.planService.getPlan(userId);
+        const currentPlan = await this.planService.getPlan(userId);
         if (currentPlan.lsOrderId === orderId) {
             console.log(`Webhook: order ${orderId} already processed for user ${userId}, skipping.`);
             return null;
         }
 
         // Upgrade the plan for 30 days
-        this.planService.upgradePlan(userId, tier, 30, orderId);
+        await this.planService.upgradePlan(userId, tier, 30, orderId);
         console.log(`✅ Upgraded user ${userId} to ${tier} (order ${orderId})`);
 
         return { userId, tier };

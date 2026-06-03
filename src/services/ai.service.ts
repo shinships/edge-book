@@ -57,9 +57,9 @@ FORMAT TRẢ LỜI:
 - Emoji: dùng tự nhiên, không quá 2-3 cái mỗi tin`;
     }
 
-    private getOrCreateHistory(userId: number): ChatMessage[] {
+    private async getOrCreateHistory(userId: number): Promise<ChatMessage[]> {
         if (!this.chatHistories.has(userId)) {
-            const profile = this.userService.getUser(userId);
+            const profile = await this.userService.getUser(userId);
             const systemMessage: ChatMessage = {
                 role: 'system',
                 content: this.getSystemInstruction(profile),
@@ -75,7 +75,7 @@ FORMAT TRẢ LỜI:
 
     async chat(prompt: string, userId: number): Promise<string> {
         try {
-            const history = this.getOrCreateHistory(userId);
+            const history = await this.getOrCreateHistory(userId);
 
             // Add user message
             history.push({ role: 'user', content: prompt });

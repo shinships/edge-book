@@ -1,5 +1,6 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import { db } from '../db';
+import { plans } from '../db/schema';
+import { eq, and, lt, isNotNull, ne } from 'drizzle-orm';
 
 // --- Interfaces ---
 
@@ -8,26 +9,24 @@ export type PlanTier = 'free' | 'pro' | 'premium';
 export interface UserPlan {
     userId: number;
     tier: PlanTier;
-    expiresAt?: string;         // ISO string — undefined = never expires (for free)
-    dailyForwardCount: number;  // Reset daily
-    lastResetDate: string;      // YYYY-MM-DD
-    lsOrderId?: string;         // LemonSqueezy order ID for idempotency
+    expiresAt?: string;
+    dailyForwardCount: number;
+    lastResetDate: string;
+    lsOrderId?: string;
 }
 
-// --- Feature gates ---
-
 export interface PlanLimits {
-    maxForwardsPerDay: number;  // -1 = unlimited
+    maxForwardsPerDay: number;
     canSearch: boolean;
     canDigest: boolean;
     canStar: boolean;
     canSentiment: boolean;
     canExport: boolean;
-    canTrade: boolean;          // Trade Journal (Pro+)
-    canLinkResearch: boolean;   // Research-to-trade link (Premium)
-    canAnalytics: boolean;      // Advanced performance analytics (Premium)
-    canThesis: boolean;         // Thesis tracker with conflict alerts (Premium)
-    maxDocs: number;            // -1 = unlimited
+    canTrade: boolean;
+    canLinkResearch: boolean;
+    canAnalytics: boolean;
+    canThesis: boolean;
+    maxDocs: number;
 }
 
 const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
@@ -72,115 +71,77 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     },
 };
 
+type PlanRow = typeof plans.$inferSelect;
+
+function toPlan(row: PlanRow): UserPlan {
+    return {
+        userId: row.userId,
+        tier: row.tier as PlanTier,
+        expiresAt: row.expiresAt?.toISOString(),
+        dailyForwardCount: row.dailyForwardCount,
+        lastResetDate: row.lastResetDate,
+        lsOrderId: row.lsOrderId ?? undefined,
+    };
+}
+
 // --- Service ---
 
 export class PlanService {
-    private dataPath: string;
-    private plans: Map<number, UserPlan>;
     private adminIds: Set<number>;
 
     constructor(adminIds: number[] = []) {
-        this.dataPath = path.resolve(__dirname, '../../data/plans.json');
-        this.plans = new Map();
         this.adminIds = new Set(adminIds);
-        this.loadData();
     }
 
-    /** True if the user is configured as an admin (always treated as Premium). */
     isAdmin(userId: number): boolean {
         return this.adminIds.has(userId);
     }
 
-    /** The tier used for feature gating — admins are always 'premium'. */
-    private effectiveTier(userId: number): PlanTier {
+    private effectiveTier(plan: UserPlan, userId: number): PlanTier {
         if (this.isAdmin(userId)) return 'premium';
-        return this.getPlan(userId).tier;
+        return plan.tier;
     }
-
-    // --- Persistence ---
-
-    private loadData() {
-        if (fs.existsSync(this.dataPath)) {
-            try {
-                const rawData = fs.readFileSync(this.dataPath, 'utf-8');
-                const parsed = JSON.parse(rawData);
-                if (Array.isArray(parsed)) {
-                    parsed.forEach((p: UserPlan) => this.plans.set(p.userId, p));
-                }
-            } catch (error) {
-                console.error('Error loading plan data:', error);
-            }
-        }
-    }
-
-    private saveData() {
-        try {
-            const data = Array.from(this.plans.values());
-            const dir = path.dirname(this.dataPath);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            fs.writeFileSync(this.dataPath, JSON.stringify(data, null, 2));
-        } catch (error) {
-            console.error('Error saving plan data:', error);
-        }
-    }
-
-    // --- Plan Management ---
 
     private getTodayString(): string {
-        return new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        return new Date().toISOString().split('T')[0];
     }
 
-    /**
-     * Get or create a user's plan (default: free).
-     */
-    getPlan(userId: number): UserPlan {
-        if (!this.plans.has(userId)) {
-            const plan: UserPlan = {
-                userId,
-                tier: 'free',
-                dailyForwardCount: 0,
-                lastResetDate: this.getTodayString(),
-            };
-            this.plans.set(userId, plan);
-            this.saveData();
-        }
-
-        const plan = this.plans.get(userId)!;
-
-        // Reset daily counter if new day
+    async getPlan(userId: number): Promise<UserPlan> {
         const today = this.getTodayString();
-        if (plan.lastResetDate !== today) {
-            plan.dailyForwardCount = 0;
-            plan.lastResetDate = today;
-            this.saveData();
+
+        await db.insert(plans).values({
+            userId,
+            tier: 'free',
+            dailyForwardCount: 0,
+            lastResetDate: today,
+        }).onConflictDoNothing();
+
+        const [row] = await db.select().from(plans).where(eq(plans.userId, userId));
+
+        if (row.lastResetDate !== today) {
+            const [updated] = await db.update(plans)
+                .set({ dailyForwardCount: 0, lastResetDate: today })
+                .where(eq(plans.userId, userId))
+                .returning();
+            return toPlan(updated!);
         }
 
-        return plan;
+        return toPlan(row!);
     }
 
-    /**
-     * Get the limits for a user's current plan.
-     */
-    getLimits(userId: number): PlanLimits {
-        return PLAN_LIMITS[this.effectiveTier(userId)];
+    async getLimits(userId: number): Promise<PlanLimits> {
+        const plan = await this.getPlan(userId);
+        return PLAN_LIMITS[this.effectiveTier(plan, userId)];
     }
 
-    /**
-     * Check if user can use a specific feature.
-     */
-    canUse(userId: number, feature: keyof Omit<PlanLimits, 'maxForwardsPerDay' | 'maxDocs'>): boolean {
-        return this.getLimits(userId)[feature] as boolean;
+    async canUse(userId: number, feature: keyof Omit<PlanLimits, 'maxForwardsPerDay' | 'maxDocs'>): Promise<boolean> {
+        const limits = await this.getLimits(userId);
+        return limits[feature] as boolean;
     }
 
-    /**
-     * Check if user can forward more messages today.
-     * Returns { allowed: boolean, remaining: number, limit: number }.
-     */
-    canForward(userId: number): { allowed: boolean; remaining: number; limit: number } {
-        const plan = this.getPlan(userId);
-        const limits = PLAN_LIMITS[this.effectiveTier(userId)];
+    async canForward(userId: number): Promise<{ allowed: boolean; remaining: number; limit: number }> {
+        const plan = await this.getPlan(userId);
+        const limits = PLAN_LIMITS[this.effectiveTier(plan, userId)];
 
         if (limits.maxForwardsPerDay === -1) {
             return { allowed: true, remaining: -1, limit: -1 };
@@ -194,56 +155,44 @@ export class PlanService {
         };
     }
 
-    /**
-     * Increment the daily forward counter.
-     */
-    incrementForwardCount(userId: number) {
-        const plan = this.getPlan(userId);
-        plan.dailyForwardCount++;
-        this.saveData();
+    async incrementForwardCount(userId: number): Promise<void> {
+        const plan = await this.getPlan(userId);
+        await db.update(plans)
+            .set({ dailyForwardCount: plan.dailyForwardCount + 1 })
+            .where(eq(plans.userId, userId));
     }
 
-    /**
-     * Upgrade a user's plan.
-     * @param orderId — Optional LemonSqueezy order ID to store for idempotency.
-     */
-    upgradePlan(userId: number, tier: PlanTier, durationDays?: number, orderId?: string) {
-        const plan = this.getPlan(userId);
-        plan.tier = tier;
+    async upgradePlan(userId: number, tier: PlanTier, durationDays?: number, orderId?: string): Promise<void> {
+        await this.getPlan(userId); // ensure exists
+
+        let expiresAt: Date | null = null;
         if (durationDays) {
-            const expires = new Date();
-            expires.setDate(expires.getDate() + durationDays);
-            plan.expiresAt = expires.toISOString();
-        } else {
-            plan.expiresAt = undefined;
+            expiresAt = new Date();
+            expiresAt.setDate(expiresAt.getDate() + durationDays);
         }
-        if (orderId) {
-            plan.lsOrderId = orderId;
-        }
-        this.saveData();
+
+        const set: Partial<typeof plans.$inferInsert> = { tier };
+        if (expiresAt !== null) set.expiresAt = expiresAt;
+        if (orderId) set.lsOrderId = orderId;
+
+        await db.update(plans).set(set).where(eq(plans.userId, userId));
     }
 
-    /**
-     * Check and downgrade expired plans.
-     */
-    checkExpiredPlans() {
-        const now = new Date().toISOString();
-        for (const [userId, plan] of this.plans.entries()) {
-            if (plan.expiresAt && plan.expiresAt < now && plan.tier !== 'free') {
-                plan.tier = 'free';
-                plan.expiresAt = undefined;
-                console.log(`Plan expired for user ${userId}, downgraded to free.`);
-            }
-        }
-        this.saveData();
+    async checkExpiredPlans(): Promise<void> {
+        await db.update(plans)
+            .set({ tier: 'free', expiresAt: null })
+            .where(
+                and(
+                    isNotNull(plans.expiresAt),
+                    lt(plans.expiresAt, new Date()),
+                    ne(plans.tier, 'free')
+                )
+            );
     }
 
-    /**
-     * Get plan display info for a user.
-     */
-    getPlanInfo(userId: number): string {
-        const plan = this.getPlan(userId);
-        const tier = this.effectiveTier(userId);
+    async getPlanInfo(userId: number): Promise<string> {
+        const plan = await this.getPlan(userId);
+        const tier = this.effectiveTier(plan, userId);
         const limits = PLAN_LIMITS[tier];
         const admin = this.isAdmin(userId);
 
@@ -279,17 +228,14 @@ export class PlanService {
         return info;
     }
 
-    /**
-     * Get all user IDs with active Pro/Premium plans (for digest cron).
-     */
-    getDigestEligibleUsers(): number[] {
+    async getDigestEligibleUsers(): Promise<number[]> {
+        const rows = await db.select({ userId: plans.userId, tier: plans.tier }).from(plans);
         const eligible = new Set<number>();
-        for (const [userId, plan] of this.plans.entries()) {
-            if (PLAN_LIMITS[plan.tier].canDigest) {
-                eligible.add(userId);
+        for (const row of rows) {
+            if (PLAN_LIMITS[row.tier as PlanTier]?.canDigest) {
+                eligible.add(row.userId);
             }
         }
-        // Admins are always Premium → always digest-eligible, even with no stored plan.
         for (const adminId of this.adminIds) {
             eligible.add(adminId);
         }
