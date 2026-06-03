@@ -11,8 +11,6 @@ import { TradeService } from './services/trade.service';
 import { ReportService } from './services/report.service';
 import { ThesisService, ThesisItem } from './services/thesis.service';
 import { startWebhookServer } from './webhook.server';
-import fs from 'fs';
-import https from 'https';
 import cron from 'node-cron';
 
 const bot = new Bot(config.telegramBotToken);
@@ -74,8 +72,6 @@ function researchLabel(content: string, max = 40): string {
 }
 
 // Format an average hold duration (in hours) for display: "45m", "3.5h", "2d 4h".
-// Rounds the total first and normalizes the 24h boundary so it never emits
-// impossible values like "24h" (→ "1d") or "1d 24h" (→ "2d").
 function formatHold(hours: number): string {
     const totalMinutes = Math.round(hours * 60);
     if (totalMinutes < 60) return `${totalMinutes}m`;
@@ -83,7 +79,7 @@ function formatHold(hours: number): string {
     const totalHours = totalMinutes / 60;
     if (totalHours < 24) {
         const h = Math.round(totalHours * 10) / 10;
-        if (h < 24) return `${h}h`;   // rounds up to 24 → fall through to days
+        if (h < 24) return `${h}h`;
     }
 
     const days = Math.floor(totalMinutes / 1440);
@@ -96,15 +92,14 @@ function formatHold(hours: number): string {
 function toAscii(s: string): string {
     return s
         .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '')    // combining diacritics
+        .replace(/[̀-ͯ]/g, '')
         .replace(/đ/g, 'd').replace(/Đ/g, 'D')
-        .replace(/[^\x20-\x7e]/g, '')       // drop any remaining non-ASCII
+        .replace(/[^\x20-\x7e]/g, '')
         .trim();
 }
 
 // Telegram Bot API 7.0 (Dec 2023) removed forward_date/forward_from/forward_from_chat/
-// forward_sender_name in favour of a single `forward_origin` object. Detect forwards and
-// extract the original source name from whichever origin variant is present.
+// forward_sender_name in favour of a single `forward_origin` object.
 function isForwarded(message: any): boolean {
     return message?.forward_origin !== undefined;
 }
@@ -114,20 +109,10 @@ function docUrl(docId: string): string {
     return `https://docs.google.com/document/d/${docId}/edit`;
 }
 
-/**
- * Strip wrapping brackets/quotes a user copies from placeholder syntax,
- * e.g. `Add Doc [ideas] [<id>]` → alias `ideas`, id `id`.
- * The help text shows `[tên] [ID]` as placeholders; users often type the brackets literally.
- */
 function stripWrappers(s: string): string {
     return s.replace(/^[\[\(<"'`]+/, '').replace(/[\]\)>"'`]+$/, '').trim();
 }
 
-/**
- * Build a user-facing reason for a Google Docs write failure.
- * A 403 almost always means the target doc isn't shared with the service account,
- * so we surface the SA email + the exact doc so the user can fix it themselves.
- */
 function docSyncErrorReason(error: any, docId: string): string {
     if (error instanceof GoogleApiError && error.status === 403) {
         const sa = googleService.getServiceAccountEmail();
@@ -205,7 +190,6 @@ bot.on('message:text', async (ctx) => {
     const text = ctx.message.text;
     const userId = ctx.from?.id;
 
-    // Show typing status
     await ctx.replyWithChatAction('typing');
 
     if (!userId) {
@@ -214,7 +198,6 @@ bot.on('message:text', async (ctx) => {
     }
 
     // --- DOCS MANAGEMENT COMMANDS ---
-    // "Add Doc [Alias] [ID]"
     const addDocMatch = text.match(/^add doc\s+(\S+)\s+(\S+)/i);
     if (addDocMatch) {
         const alias = stripWrappers(addDocMatch[1]);
@@ -223,16 +206,15 @@ bot.on('message:text', async (ctx) => {
             await ctx.reply('⚠️ Cú pháp: Add Doc tên ID (không cần ngoặc vuông).');
             return;
         }
-        userService.setDocAlias(userId, alias, docId);
+        await userService.setDocAlias(userId, alias, docId);
         await ctx.reply(`✅ Added Doc "${alias}". Set as default if none existed.`);
         return;
     }
 
-    // "Use Doc [Alias/ID]"
-    const setDocMatch = text.match(/^use doc\s+(\S+)/i); // or "Select Doc"
+    const setDocMatch = text.match(/^use doc\s+(\S+)/i);
     if (setDocMatch) {
         const alias = stripWrappers(setDocMatch[1]);
-        if (userService.setActiveDoc(userId, alias)) {
+        if (await userService.setActiveDoc(userId, alias)) {
             await ctx.reply(`✅ Switched to Doc: ${alias}`);
         } else {
             await ctx.reply(`⚠️ Doc "${alias}" not found. Use Add Doc first.`);
@@ -240,11 +222,10 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // "Current Doc"
     if (text.toLowerCase() === 'current doc') {
-        const activeId = userService.getActiveDocId(userId);
+        const activeId = await userService.getActiveDocId(userId);
         if (activeId) {
-            const alias = userService.getActiveDocAlias(userId);
+            const alias = await userService.getActiveDocAlias(userId);
             const aliasLine = alias ? `\n🏷️ Alias: ${alias}` : '';
             await ctx.reply(
                 `📂 Current Doc${aliasLine}\n🆔 ${activeId}\n🔗 ${docUrl(activeId)}`,
@@ -261,20 +242,18 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // ---------------------------
-
     // --- TO-DO LIST COMMANDS ---
     if (text.toLowerCase().startsWith('add task:')) {
-        const task = text.substring(9).trim(); // "add task:".length = 9
+        const task = text.substring(9).trim();
         if (task) {
-            todoService.addTodo(userId, task);
+            await todoService.addTodo(userId, task);
             await ctx.reply(`Added task: "${task}"`);
             return;
         }
     }
 
     if (text.toLowerCase() === 'list tasks' || text.toLowerCase() === 'todo list') {
-        const items = todoService.getTodos(userId).filter(i => !i.completed);
+        const items = (await todoService.getTodos(userId)).filter((i) => !i.completed);
         if (items.length === 0) {
             await ctx.reply('You have no pending tasks.');
         } else {
@@ -285,9 +264,9 @@ bot.on('message:text', async (ctx) => {
     }
 
     if (text.toLowerCase().startsWith('complete task:')) {
-        const keyword = text.substring(14).trim(); // "complete task:".length = 14
+        const keyword = text.substring(14).trim();
         if (keyword) {
-            const completedItem = todoService.completeTodo(userId, keyword);
+            const completedItem = await todoService.completeTodo(userId, keyword);
             if (completedItem) {
                 await ctx.reply(`Marked as done: "${completedItem.task}"`);
             } else {
@@ -296,11 +275,9 @@ bot.on('message:text', async (ctx) => {
             return;
         }
     }
-    // ---------------------------
 
     // --- RESEARCH OS COMMANDS ---
 
-    // "Search: <keyword>" — search saved research
     if (text.toLowerCase().startsWith('search:')) {
         const keyword = text.substring(7).trim();
         if (!keyword) {
@@ -308,13 +285,12 @@ bot.on('message:text', async (ctx) => {
             return;
         }
 
-        // Check plan
-        if (!planService.canUse(userId, 'canSearch')) {
+        if (!await planService.canUse(userId, 'canSearch')) {
             await ctx.reply('🔒 Search là tính năng Pro. Nâng cấp để sử dụng!\n\nGõ /plan để xem chi tiết.');
             return;
         }
 
-        const results = researchService.searchByKeyword(userId, keyword);
+        const results = await researchService.searchByKeyword(userId, keyword);
         if (results.length === 0) {
             await ctx.reply(`🔍 Không tìm thấy research nào chứa "${keyword}".`);
         } else {
@@ -330,7 +306,6 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // "Tag: <ticker>" — find all research for a ticker
     if (text.toLowerCase().startsWith('tag:')) {
         const ticker = text.substring(4).trim().toUpperCase();
         if (!ticker) {
@@ -338,12 +313,12 @@ bot.on('message:text', async (ctx) => {
             return;
         }
 
-        if (!planService.canUse(userId, 'canSearch')) {
+        if (!await planService.canUse(userId, 'canSearch')) {
             await ctx.reply('🔒 Search/Tag là tính năng Pro. Nâng cấp để sử dụng!\n\nGõ /plan để xem chi tiết.');
             return;
         }
 
-        const results = researchService.searchByTicker(userId, ticker);
+        const results = await researchService.searchByTicker(userId, ticker);
         if (results.length === 0) {
             await ctx.reply(`🏷️ Không có research nào tagged ${ticker}.`);
         } else {
@@ -359,47 +334,44 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // "Digest" — manually trigger daily digest
     if (text.toLowerCase() === 'digest' || text.toLowerCase() === 'daily digest') {
-        if (!planService.canUse(userId, 'canDigest')) {
+        if (!await planService.canUse(userId, 'canDigest')) {
             await ctx.reply('🔒 Daily Digest là tính năng Pro. Nâng cấp để sử dụng!\n\nGõ /plan để xem chi tiết.');
             return;
         }
 
         await ctx.replyWithChatAction('typing');
-        const digestData = researchService.getDigestData(userId, 24);
+        const digestData = await researchService.getDigestData(userId, 24);
         const digest = await aiService.generateDigest(digestData);
         await ctx.reply(digest);
         return;
     }
 
-    // "Weekly Report" — 7-day report with sentiment shift (Pro)
     if (
         text.toLowerCase() === 'weekly report' ||
         text.toLowerCase() === 'weekly' ||
         text.toLowerCase() === 'weekly digest'
     ) {
-        if (!planService.canUse(userId, 'canDigest')) {
+        if (!await planService.canUse(userId, 'canDigest')) {
             await ctx.reply('🔒 Weekly Report là tính năng Pro. Nâng cấp để sử dụng!\n\nGõ /plan để xem chi tiết.');
             return;
         }
 
         await ctx.replyWithChatAction('typing');
-        const weeklyData = researchService.getWeeklyReportData(userId);
+        const weeklyData = await researchService.getWeeklyReportData(userId);
         const report = await aiService.generateWeeklyReport(weeklyData);
         await ctx.reply(report);
         return;
     }
 
-    // "Stats" — research stats
     if (text.toLowerCase() === 'stats' || text.toLowerCase() === 'research stats') {
-        const stats = researchService.getStats(userId);
+        const stats = await researchService.getStats(userId);
         if (stats.totalItems === 0) {
             await ctx.reply('📊 Chưa có research nào. Forward messages vào bot để bắt đầu!');
             return;
         }
 
-        const topTickers = stats.topTickers.slice(0, 5).map(t => `  ${t.ticker}: ${t.count}`).join('\n');
+        const topTickers = stats.topTickers.slice(0, 5).map((t) => `  ${t.ticker}: ${t.count}`).join('\n');
         await ctx.reply(
             `📊 Research Stats\n\n` +
             `📦 Tổng: ${stats.totalItems} items\n` +
@@ -411,9 +383,8 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // "Starred" — view starred/bookmarked items
     if (text.toLowerCase() === 'starred' || text.toLowerCase() === 'bookmarks') {
-        const starred = researchService.getStarredItems(userId);
+        const starred = await researchService.getStarredItems(userId);
         if (starred.length === 0) {
             await ctx.reply('⭐ Chưa có bookmark nào. Reply ⭐ hoặc gõ Star để bookmark research gần nhất.');
             return;
@@ -429,9 +400,8 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // "Star" — star the most recent research item
     if (text.toLowerCase() === 'star' || text.toLowerCase() === '⭐') {
-        const starred = researchService.starLatest(userId);
+        const starred = await researchService.starLatest(userId);
         if (starred) {
             await ctx.reply(`⭐ Đã bookmark: "${starred.content.substring(0, 80)}..."`);
         } else {
@@ -440,7 +410,6 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // "Ask: <question>" — ask AI about saved research
     if (text.toLowerCase().startsWith('ask:')) {
         const question = text.substring(4).trim();
         if (!question) {
@@ -448,28 +417,27 @@ bot.on('message:text', async (ctx) => {
             return;
         }
 
-        if (!planService.canUse(userId, 'canSearch')) {
+        if (!await planService.canUse(userId, 'canSearch')) {
             await ctx.reply('🔒 Research Q&A là tính năng Pro. Nâng cấp để sử dụng!\n\nGõ /plan để xem chi tiết.');
             return;
         }
 
         await ctx.replyWithChatAction('typing');
-        const items = researchService.getItems(userId);
+        const items = await researchService.getItems(userId);
         const answer = await aiService.askAboutResearch(question, items);
         await ctx.reply(`🤖 Research AI:\n\n${answer}`);
         return;
     }
 
-    // "/plan" — show current plan info
     if (text.toLowerCase() === '/plan' || text.toLowerCase() === 'my plan') {
-        const info = planService.getPlanInfo(userId);
+        const info = await planService.getPlanInfo(userId);
         await ctx.reply(info);
         return;
     }
 
     // "Close Thesis: <index|ticker>" — close an active thesis (Premium)
     if (text.toLowerCase().startsWith('close thesis:')) {
-        if (!planService.canUse(userId, 'canThesis')) {
+        if (!await planService.canUse(userId, 'canThesis')) {
             await ctx.reply('🔒 Thesis Tracker là tính năng Premium. Gõ /upgrade để nâng cấp!');
             return;
         }
@@ -478,7 +446,7 @@ bot.on('message:text', async (ctx) => {
             await ctx.reply('⚠️ Cú pháp: Close Thesis: <số thứ tự hoặc ticker>. Gõ Theses để xem danh sách.');
             return;
         }
-        const closed = thesisService.closeThesis(userId, selector);
+        const closed = await thesisService.closeThesis(userId, selector);
         if (!closed) {
             await ctx.reply(`⚠️ Không tìm thấy thesis "${selector}". Gõ Theses để xem danh sách.`);
             return;
@@ -490,7 +458,7 @@ bot.on('message:text', async (ctx) => {
 
     // "Thesis: <ticker> <bullish|bearish> <text>" — record a thesis (Premium)
     if (text.toLowerCase().startsWith('thesis:')) {
-        if (!planService.canUse(userId, 'canThesis')) {
+        if (!await planService.canUse(userId, 'canThesis')) {
             await ctx.reply('🔒 Thesis Tracker là tính năng Premium. Gõ /upgrade để nâng cấp!');
             return;
         }
@@ -507,7 +475,7 @@ bot.on('message:text', async (ctx) => {
         }
         const word = m[2].toLowerCase();
         const stance: 'bullish' | 'bearish' = (word === 'bullish' || word === 'long') ? 'bullish' : 'bearish';
-        const thesis = thesisService.addThesis(userId, rawTicker, stance, m[3]);
+        const thesis = await thesisService.addThesis(userId, rawTicker, stance, m[3]);
         const e = stance === 'bullish' ? '📈' : '📉';
         await ctx.reply(
             `${e} Đã ghi thesis ${thesis.ticker} (${stance}):\n"${thesis.text}"\n\n` +
@@ -518,11 +486,11 @@ bot.on('message:text', async (ctx) => {
 
     // "Theses" / "My Theses" — list active theses (Premium)
     if (text.toLowerCase() === 'theses' || text.toLowerCase() === 'my theses') {
-        if (!planService.canUse(userId, 'canThesis')) {
+        if (!await planService.canUse(userId, 'canThesis')) {
             await ctx.reply('🔒 Thesis Tracker là tính năng Premium. Gõ /upgrade để nâng cấp!');
             return;
         }
-        const active = thesisService.getActiveTheses(userId);
+        const active = await thesisService.getActiveTheses(userId);
         if (active.length === 0) {
             await ctx.reply('📋 Chưa có thesis nào. Ghi mới: Thesis: BTC bullish 150k EOY');
             return;
@@ -538,18 +506,15 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // --- END RESEARCH OS COMMANDS ---
-
     // --- TRADE JOURNAL COMMANDS (Pro) ---
 
     // Trade: Long BTC entry 108k SL 105k TP 115k
     if (text.toLowerCase().startsWith('trade:')) {
-        if (!planService.canUse(userId, 'canTrade')) {
+        if (!await planService.canUse(userId, 'canTrade')) {
             await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
             return;
         }
-        const tradeUsage =
-            '⚠️ Sai cú pháp. Ví dụ: Trade: Long BTC entry 108k SL 105k TP 115k';
+        const tradeUsage = '⚠️ Sai cú pháp. Ví dụ: Trade: Long BTC entry 108k SL 105k TP 115k';
         const m = text.slice(text.indexOf(':') + 1).trim().match(/^(long|short)\s+(\S+)\s+(.+)$/i);
         if (!m) {
             await ctx.reply(tradeUsage);
@@ -570,7 +535,7 @@ bot.on('message:text', async (ctx) => {
             await ctx.reply('⚠️ Thiếu hoặc sai giá entry. ' + tradeUsage);
             return;
         }
-        const trade = tradeService.openTrade(userId, {
+        const trade = await tradeService.openTrade(userId, {
             ticker,
             direction,
             entryPrice: entry,
@@ -582,7 +547,6 @@ bot.on('message:text', async (ctx) => {
             return;
         }
         const dirEmoji = direction === 'long' ? '🟢' : '🔴';
-        // Warn on a reversed-logic setup (e.g. long with TP below entry)
         const reversed =
             (sl !== undefined && tp !== undefined) &&
             (direction === 'long' ? !(tp > entry && sl < entry) : !(tp < entry && sl > entry));
@@ -598,7 +562,7 @@ bot.on('message:text', async (ctx) => {
 
     // Close: BTC 112k  |  Close: BTC +3.2%
     if (text.toLowerCase().startsWith('close:')) {
-        if (!planService.canUse(userId, 'canTrade')) {
+        if (!await planService.canUse(userId, 'canTrade')) {
             await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
             return;
         }
@@ -631,7 +595,7 @@ bot.on('message:text', async (ctx) => {
             }
             exit = { price };
         }
-        const closed = tradeService.closeTrade(userId, ticker, exit);
+        const closed = await tradeService.closeTrade(userId, ticker, exit);
         if (!closed) {
             await ctx.reply(`⚠️ Không tìm thấy lệnh open nào cho ${ticker}.`);
             return;
@@ -645,18 +609,14 @@ bot.on('message:text', async (ctx) => {
         );
 
         // Research-to-trade link (Premium): offer to link recent research on this ticker.
-        if (planService.canUse(userId, 'canLinkResearch')) {
-            // Prefer items matching the ticker; fall back to the most recent research.
+        if (await planService.canUse(userId, 'canLinkResearch')) {
             const alreadyLinked = new Set(closed.linkedResearch ?? []);
-            let candidates = researchService
-                .searchByTicker(userId, closed.ticker)
+            let candidates = (await researchService.searchByTicker(userId, closed.ticker))
                 .filter((r) => !alreadyLinked.has(r.id));
             if (candidates.length === 0) {
-                candidates = researchService
-                    .getRecentItems(userId, 24 * 7)
+                candidates = (await researchService.getRecentItems(userId, 24 * 7))
                     .filter((r) => !alreadyLinked.has(r.id));
             }
-            // Most recent first, cap at 5 to keep the keyboard tidy.
             candidates = candidates.slice(-5).reverse();
             if (candidates.length > 0) {
                 const keyboard = new InlineKeyboard();
@@ -672,12 +632,15 @@ bot.on('message:text', async (ctx) => {
 
     // Trades / My Trades
     if (text.toLowerCase() === 'trades' || text.toLowerCase() === 'my trades') {
-        if (!planService.canUse(userId, 'canTrade')) {
+        if (!await planService.canUse(userId, 'canTrade')) {
             await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
             return;
         }
-        const open = tradeService.getOpenTrades(userId);
-        const closed = tradeService.getClosedTrades(userId).slice(-5).reverse();
+        const [open, closedAll] = await Promise.all([
+            tradeService.getOpenTrades(userId),
+            tradeService.getClosedTrades(userId),
+        ]);
+        const closed = closedAll.slice(-5).reverse();
         if (open.length === 0 && closed.length === 0) {
             await ctx.reply('📒 Chưa có lệnh nào. Mở lệnh: Trade: Long BTC entry 108k SL 105k TP 115k');
             return;
@@ -708,11 +671,11 @@ bot.on('message:text', async (ctx) => {
 
     // Trade Stats
     if (text.toLowerCase() === 'trade stats') {
-        if (!planService.canUse(userId, 'canTrade')) {
+        if (!await planService.canUse(userId, 'canTrade')) {
             await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
             return;
         }
-        const s = tradeService.getStats(userId);
+        const s = await tradeService.getStats(userId);
         if (s.closed === 0) {
             await ctx.reply('📊 Chưa có lệnh đã đóng nào để thống kê.');
             return;
@@ -729,17 +692,17 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // Trade Analytics / Performance (Premium) — breakdown by ticker/direction/month + AI insight
+    // Trade Analytics / Performance (Premium)
     if (
         text.toLowerCase() === 'trade analytics' ||
         text.toLowerCase() === 'analytics' ||
         text.toLowerCase() === 'performance'
     ) {
-        if (!planService.canUse(userId, 'canAnalytics')) {
+        if (!await planService.canUse(userId, 'canAnalytics')) {
             await ctx.reply('🔒 Performance Analytics là tính năng Premium. Gõ /upgrade để nâng cấp!');
             return;
         }
-        const a = tradeService.getAnalytics(userId);
+        const a = await tradeService.getAnalytics(userId);
         if (a.closedCount === 0) {
             await ctx.reply('📊 Chưa có lệnh đã đóng nào để phân tích. Đóng vài lệnh trước nhé!');
             return;
@@ -771,7 +734,6 @@ bot.on('message:text', async (ctx) => {
 
         await ctx.reply(msg);
 
-        // AI insight (best-effort — skipped silently if it fails)
         await ctx.replyWithChatAction('typing');
         const insight = await aiService.generateTradeInsight(a);
         if (insight) {
@@ -787,26 +749,30 @@ bot.on('message:text', async (ctx) => {
         text.toLowerCase() === 'export trades' ||
         text.toLowerCase() === 'export report'
     ) {
-        if (!planService.canUse(userId, 'canExport')) {
+        if (!await planService.canUse(userId, 'canExport')) {
             await ctx.reply('🔒 Export PDF là tính năng Premium. Gõ /upgrade để nâng cấp!');
             return;
         }
-        const stats = tradeService.getStats(userId);
+        const stats = await tradeService.getStats(userId);
         if (stats.closed === 0) {
             await ctx.reply('📄 Chưa có lệnh đã đóng nào để xuất báo cáo. Đóng vài lệnh trước nhé!');
             return;
         }
         await ctx.reply('📄 Đang tạo báo cáo PDF...');
         try {
-            const profile = userService.getUser(userId);
+            const [profile, analytics, closedTrades] = await Promise.all([
+                userService.getUser(userId),
+                tradeService.getAnalytics(userId),
+                tradeService.getClosedTrades(userId),
+            ]);
             const traderName =
                 toAscii(profile.fullName || profile.username || '') || `Trader ${userId}`;
             const pdf = await reportService.generateTradeReport({
                 traderName,
                 generatedAt: new Date(),
                 stats,
-                analytics: tradeService.getAnalytics(userId),
-                closedTrades: [...tradeService.getClosedTrades(userId)].reverse(), // newest first
+                analytics,
+                closedTrades: [...closedTrades].reverse(),
             });
             const fileName = `edgebook-trade-report-${new Date().toISOString().slice(0, 10)}.pdf`;
             await ctx.replyWithDocument(new InputFile(pdf, fileName), {
@@ -818,8 +784,6 @@ bot.on('message:text', async (ctx) => {
         }
         return;
     }
-
-    // --- END TRADE JOURNAL COMMANDS ---
 
     // 1. Check if user wants to schedule something
     if (text.toLowerCase().includes('schedule') || text.toLowerCase().includes('meeting') || text.toLowerCase().includes('remind')) {
@@ -839,7 +803,7 @@ bot.on('message:text', async (ctx) => {
     const nameMatch = text.match(/call me (.+)/i) || text.match(/my name is (.+)/i);
     if (nameMatch) {
         const newName = nameMatch[1].trim();
-        aiService.getUserService().updateUser(userId, { fullName: newName });
+        await userService.updateUser(userId, { fullName: newName });
         aiService.refreshSession(userId);
         await ctx.reply(`Hello ${newName}! I have remembered your name.`);
         return;
@@ -848,7 +812,7 @@ bot.on('message:text', async (ctx) => {
     const jobMatch = text.match(/my job is (.+)/i) || text.match(/i work as (.+)/i);
     if (jobMatch) {
         const newJob = jobMatch[1].trim();
-        aiService.getUserService().updateUser(userId, { jobTitle: newJob });
+        await userService.updateUser(userId, { jobTitle: newJob });
         aiService.refreshSession(userId);
         await ctx.reply(`I have noted that your job is: ${newJob}`);
         return;
@@ -856,27 +820,24 @@ bot.on('message:text', async (ctx) => {
 
     if (text.toLowerCase().startsWith('remember:')) {
         const note = text.substring(9).trim();
-        aiService.getUserService().addNote(userId, note);
+        await userService.addNote(userId, note);
         aiService.refreshSession(userId);
         await ctx.reply('Note added to your profile.');
         return;
     }
 
     // 3. Save to Docs (Command OR Forward) — ENHANCED with Research OS
-    // Check for "Save:" command OR if the message is Forwarded
     const isForward = isForwarded(ctx.message);
     const isSaveCommand = text.toLowerCase().startsWith('save:');
 
     if (isSaveCommand || isForward) {
         let content = text;
         if (isSaveCommand) {
-            content = text.substring(5).trim(); // "Save:".length = 5
-        } else {
-            content = text;
+            content = text.substring(5).trim();
         }
 
         // --- Rate limiting for free users ---
-        const forwardCheck = planService.canForward(userId);
+        const forwardCheck = await planService.canForward(userId);
         if (!forwardCheck.allowed) {
             await ctx.reply(
                 `⚠️ Bạn đã dùng hết ${forwardCheck.limit} forwards/ngày (Free plan).\n\n` +
@@ -886,21 +847,21 @@ bot.on('message:text', async (ctx) => {
             return;
         }
 
-        const targetDocId = userService.getActiveDocId(userId) || config.googleDocId;
+        const targetDocId = await userService.getActiveDocId(userId) || config.googleDocId;
 
         // --- Save to Research Service (auto-tag) ---
         const forwardFrom = getForwardSource(ctx.message);
+        const researchItem = await researchService.addItem(userId, content, forwardFrom);
+        await planService.incrementForwardCount(userId);
 
-        const researchItem = researchService.addItem(userId, content, forwardFrom);
-        planService.incrementForwardCount(userId);
-
-        // --- Thesis conflict detection (Premium): alert if new research contradicts an active thesis ---
+        // --- Thesis conflict detection (Premium) ---
         let thesisAlert = '';
-        if (planService.canUse(userId, 'canThesis') && researchItem.sentiment !== 0) {
+        if (await planService.canUse(userId, 'canThesis') && researchItem.sentiment !== 0) {
             const conflicts: ThesisItem[] = [];
             const seen = new Set<string>();
             for (const ticker of researchItem.tickers) {
-                for (const t of thesisService.findConflicts(userId, ticker, researchItem.sentiment)) {
+                const tickerConflicts = await thesisService.findConflicts(userId, ticker, researchItem.sentiment);
+                for (const t of tickerConflicts) {
                     if (!seen.has(t.id)) { seen.add(t.id); conflicts.push(t); }
                 }
             }
@@ -920,43 +881,40 @@ bot.on('message:text', async (ctx) => {
         const tagInfo = researchItem.tickers.length > 0
             ? `\n🏷️ Tags: ${researchItem.tickers.join(', ')}`
             : '';
-        const catInfo = researchItem.categories.filter(c => c !== 'general').length > 0
-            ? `\n📂 ${researchItem.categories.filter(c => c !== 'general').join(', ')}`
+        const catInfo = researchItem.categories.filter((c) => c !== 'general').length > 0
+            ? `\n📂 ${researchItem.categories.filter((c) => c !== 'general').join(', ')}`
             : '';
         const sentimentEmoji = researchItem.sentiment > 0.2 ? '🟢' : researchItem.sentiment < -0.2 ? '🔴' : '🟡';
-        const sentimentInfo = researchItem.sentiment !== 0 ? `\n${sentimentEmoji} Sentiment: ${researchItem.sentiment > 0 ? '+' : ''}${researchItem.sentiment.toFixed(2)}` : '';
+        const sentimentInfo = researchItem.sentiment !== 0
+            ? `\n${sentimentEmoji} Sentiment: ${researchItem.sentiment > 0 ? '+' : ''}${researchItem.sentiment.toFixed(2)}`
+            : '';
 
-        // --- Also save to Google Docs (existing behavior) ---
+        // --- Also save to Google Docs ---
         if (targetDocId) {
             try {
                 await googleService.appendToDocs(targetDocId, `${content}`);
                 const source = isForward ? 'forwarded message' : 'content';
                 try {
                     await ctx.api.setMessageReaction(ctx.chat.id, ctx.message.message_id, [{ type: 'emoji', emoji: '❤' }]);
-                    // Send tag info as a separate quiet reply if tags were found
                     if (tagInfo || catInfo) {
                         await ctx.reply(`📊 Research saved!${tagInfo}${catInfo}${sentimentInfo}`);
                     }
                 } catch (e) {
-                    // Fallback if reactions are disabled or not supported
                     await ctx.reply(`✅ Saved ${source} to Google Docs${tagInfo}${catInfo}${sentimentInfo}`);
                 }
             } catch (error) {
-                // Google Docs failed, but research is still saved locally
                 await ctx.reply(`✅ Research saved locally${tagInfo}${catInfo}${sentimentInfo}${docSyncErrorReason(error, targetDocId)}`);
             }
         } else {
-            // No Google Doc configured — still save to research
             await ctx.reply(`✅ Research saved!${tagInfo}${catInfo}${sentimentInfo}\n💡 Tip: Add Doc [name] [ID] để sync với Google Docs.`);
         }
 
         // Show remaining quota for free users
-        const remaining = planService.canForward(userId);
+        const remaining = await planService.canForward(userId);
         if (remaining.limit !== -1 && remaining.remaining <= 3 && remaining.remaining > 0) {
             await ctx.reply(`⚡ Còn ${remaining.remaining}/${remaining.limit} forwards hôm nay.`);
         }
 
-        // Surface a thesis-conflict alert (if any) as a separate, prominent message.
         if (thesisAlert) {
             await ctx.reply(thesisAlert);
         }
@@ -977,9 +935,8 @@ bot.on('message:photo', async (ctx) => {
 
     if (!photo || !userId) return;
 
-    // Check for "Save" keyword OR if it is a Forward
     const isForward = isForwarded(ctx.message);
-    const hasSaveKeyword = /save/i.test(caption); // No longer checking "lưu" unless requested
+    const hasSaveKeyword = /save/i.test(caption);
 
     if (!hasSaveKeyword && !isForward) {
         return;
@@ -987,8 +944,7 @@ bot.on('message:photo', async (ctx) => {
 
     await ctx.replyWithChatAction('upload_photo');
 
-    // Rate limiting
-    const forwardCheck = planService.canForward(userId);
+    const forwardCheck = await planService.canForward(userId);
     if (!forwardCheck.allowed) {
         await ctx.reply(
             `⚠️ Bạn đã dùng hết ${forwardCheck.limit} forwards/ngày (Free plan).\n` +
@@ -1003,7 +959,7 @@ bot.on('message:photo', async (ctx) => {
             const fileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${file.file_path}`;
 
             try {
-                const targetDocId = userService.getActiveDocId(userId) || config.googleDocId;
+                const targetDocId = await userService.getActiveDocId(userId) || config.googleDocId;
 
                 if (targetDocId) {
                     let cleanCaption = caption;
@@ -1017,12 +973,11 @@ bot.on('message:photo', async (ctx) => {
 
                     await googleService.insertImageToDocs(targetDocId, fileUrl, cleanCaption);
 
-                    // Also save caption to research if it has content
                     if (cleanCaption) {
                         const forwardFrom = getForwardSource(ctx.message);
-                        researchService.addItem(userId, `[Image] ${cleanCaption}`, forwardFrom);
+                        await researchService.addItem(userId, `[Image] ${cleanCaption}`, forwardFrom);
                     }
-                    planService.incrementForwardCount(userId);
+                    await planService.incrementForwardCount(userId);
 
                     try {
                         await ctx.api.setMessageReaction(ctx.chat.id, ctx.message.message_id, [{ type: 'emoji', emoji: '❤' }]);
@@ -1034,7 +989,7 @@ bot.on('message:photo', async (ctx) => {
                 }
             } catch (docError) {
                 console.error('Docs Insert Error:', docError);
-                const targetDocId = userService.getActiveDocId(userId) || config.googleDocId;
+                const targetDocId = await userService.getActiveDocId(userId) || config.googleDocId;
                 await ctx.reply(`⚠️ Lưu ảnh vào Docs thất bại.${docSyncErrorReason(docError, targetDocId)}`);
             }
         }
@@ -1045,20 +1000,19 @@ bot.on('message:photo', async (ctx) => {
 });
 
 // --- DAILY DIGEST CRON JOB ---
-// Runs at 08:00 every day (Asia/Ho_Chi_Minh timezone)
 cron.schedule('0 8 * * *', async () => {
     console.log('[Digest] Running daily digest cron...');
 
-    // Get all users who have digest enabled (Pro/Premium)
-    const eligibleUsers = planService.getDigestEligibleUsers();
-    // Also include users who have research items (they might all be free during early access)
-    const allResearchUsers = researchService.getAllUserIds();
+    const [eligibleUsers, allResearchUsers] = await Promise.all([
+        planService.getDigestEligibleUsers(),
+        researchService.getAllUserIds(),
+    ]);
     const usersToDigest = [...new Set([...eligibleUsers, ...allResearchUsers])];
 
     for (const userId of usersToDigest) {
         try {
-            const digestData = researchService.getDigestData(userId, 24);
-            if (digestData.totalItems === 0) continue; // Skip users with no new research
+            const digestData = await researchService.getDigestData(userId, 24);
+            if (digestData.totalItems === 0) continue;
 
             const digest = await aiService.generateDigest(digestData);
             await bot.api.sendMessage(userId, `📬 Daily Research Digest\n\n${digest}`);
@@ -1068,29 +1022,27 @@ cron.schedule('0 8 * * *', async () => {
         }
     }
 
-    // Also check for expired plans
-    planService.checkExpiredPlans();
-
+    await planService.checkExpiredPlans();
     console.log('[Digest] Daily digest cron completed.');
 }, {
     timezone: 'Asia/Ho_Chi_Minh',
 });
 
 // --- WEEKLY REPORT CRON JOB ---
-// Runs at 18:00 every Sunday (Asia/Ho_Chi_Minh timezone)
 cron.schedule('0 18 * * 0', async () => {
     console.log('[Weekly] Running weekly report cron...');
 
-    const eligibleUsers = planService.getDigestEligibleUsers();
-    const allResearchUsers = researchService.getAllUserIds();
+    const [eligibleUsers, allResearchUsers] = await Promise.all([
+        planService.getDigestEligibleUsers(),
+        researchService.getAllUserIds(),
+    ]);
     const usersToReport = [...new Set([...eligibleUsers, ...allResearchUsers])];
 
     for (const userId of usersToReport) {
         try {
-            // Only send to users who can use digest (Pro/Premium).
-            if (!planService.canUse(userId, 'canDigest')) continue;
-            const weeklyData = researchService.getWeeklyReportData(userId);
-            if (weeklyData.totalItems === 0) continue; // Skip users with no research this week
+            if (!await planService.canUse(userId, 'canDigest')) continue;
+            const weeklyData = await researchService.getWeeklyReportData(userId);
+            if (weeklyData.totalItems === 0) continue;
 
             const report = await aiService.generateWeeklyReport(weeklyData);
             await bot.api.sendMessage(userId, `🗓️ Weekly Research Report\n\n${report}`);
@@ -1110,7 +1062,7 @@ bot.command('upgrade', async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) return;
 
-    const plan = planService.getPlan(userId);
+    const plan = await planService.getPlan(userId);
 
     if (!config.lsApiKey) {
         await ctx.reply('⚠️ Tính năng thanh toán chưa được kích hoạt. Vui lòng liên hệ admin.');
@@ -1187,21 +1139,27 @@ bot.callbackQuery(/^linkres:([^:]+):([^:]+)$/, async (ctx) => {
         await ctx.answerCallbackQuery();
         return;
     }
-    if (!planService.canUse(userId, 'canLinkResearch')) {
+    if (!await planService.canUse(userId, 'canLinkResearch')) {
         await ctx.answerCallbackQuery({ text: '🔒 Tính năng Premium', show_alert: true });
         return;
     }
     const tradeId = ctx.match![1];
     const researchId = ctx.match![2];
 
-    // Validate BOTH records exist before mutating, so a stale callback can't
-    // persist a dangling research id (which would show a phantom 🔗 count).
-    const research = researchService.getItemById(userId, researchId);
-    if (!research || !tradeService.getTradeById(userId, tradeId)) {
+    const [research, tradeLookup] = await Promise.all([
+        researchService.getItemById(userId, researchId),
+        tradeService.getTradeById(userId, tradeId),
+    ]);
+
+    if (!research || !tradeLookup) {
         await ctx.answerCallbackQuery({ text: '⚠️ Không tìm thấy lệnh hoặc research', show_alert: true });
         return;
     }
-    const trade = tradeService.linkResearch(userId, tradeId, researchId)!;
+    const trade = await tradeService.linkResearch(userId, tradeId, researchId);
+    if (!trade) {
+        await ctx.answerCallbackQuery({ text: '⚠️ Lỗi khi link research', show_alert: true });
+        return;
+    }
     await ctx.answerCallbackQuery({ text: '✅ Đã link!' });
     const count = trade.linkedResearch?.length ?? 0;
     await ctx.editMessageText(
@@ -1215,7 +1173,7 @@ bot.callbackQuery(/^linkres_skip:.+$/, async (ctx) => {
     await ctx.editMessageText('👍 Đã bỏ qua link research.');
 });
 
-// Slash commands shown in Telegram's command menu (the list that pops up on "/").
+// Slash commands shown in Telegram's command menu.
 const BOT_COMMANDS = [
     { command: 'start', description: '👋 Khởi động & giới thiệu EdgeBook' },
     { command: 'help', description: '📓 Hướng dẫn sử dụng & danh sách lệnh' },

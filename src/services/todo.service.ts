@@ -1,5 +1,6 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import { db } from '../db';
+import { todos } from '../db/schema';
+import { eq, and } from 'drizzle-orm';
 
 export interface TodoItem {
     id: number;
@@ -8,90 +9,56 @@ export interface TodoItem {
     createdAt: string;
 }
 
-export interface UserTodo {
-    userId: number;
-    items: TodoItem[];
+type TodoRow = typeof todos.$inferSelect;
+
+function toItem(row: TodoRow): TodoItem {
+    return {
+        id: row.id,
+        task: row.task,
+        completed: row.completed,
+        createdAt: row.createdAt.toISOString(),
+    };
 }
 
 export class TodoService {
-    private dataPath: string;
-    private todos: Map<number, TodoItem[]>;
-
-    constructor() {
-        this.dataPath = path.resolve(__dirname, '../../data/todos.json');
-        this.todos = new Map();
-        this.loadData();
+    async getTodos(userId: number): Promise<TodoItem[]> {
+        const rows = await db.select().from(todos).where(eq(todos.userId, userId));
+        return rows.map(toItem);
     }
 
-    private loadData() {
-        if (fs.existsSync(this.dataPath)) {
-            try {
-                const rawData = fs.readFileSync(this.dataPath, 'utf-8');
-                const parsed = JSON.parse(rawData);
-                if (Array.isArray(parsed)) {
-                    parsed.forEach((u: UserTodo) => this.todos.set(u.userId, u.items));
-                }
-            } catch (error) {
-                console.error('Error loading todo data:', error);
-            }
-        }
-    }
-
-    private saveData() {
-        try {
-            const data: UserTodo[] = Array.from(this.todos.entries()).map(([userId, items]) => ({
-                userId,
-                items
-            }));
-            fs.writeFileSync(this.dataPath, JSON.stringify(data, null, 2));
-        } catch (error) {
-            console.error('Error saving todo data:', error);
-        }
-    }
-
-    getTodos(userId: number): TodoItem[] {
-        if (!this.todos.has(userId)) {
-            this.todos.set(userId, []);
-        }
-        return this.todos.get(userId)!;
-    }
-
-    addTodo(userId: number, task: string) {
-        const items = this.getTodos(userId);
-        const newItem: TodoItem = {
+    async addTodo(userId: number, task: string): Promise<void> {
+        await db.insert(todos).values({
             id: Date.now(),
+            userId,
             task,
             completed: false,
-            createdAt: new Date().toISOString()
-        };
-        items.push(newItem);
-        this.saveData();
+            createdAt: new Date(),
+        });
     }
 
-    completeTodo(userId: number, keywordOrIndex: string) {
-        const items = this.getTodos(userId);
-        // Try to parse as index (1-based)
+    async completeTodo(userId: number, keywordOrIndex: string): Promise<TodoItem | null> {
+        const items = await this.getTodos(userId);
         const index = parseInt(keywordOrIndex);
+
+        let target: TodoItem | undefined;
         if (!isNaN(index) && index > 0 && index <= items.length) {
-            items[index - 1].completed = true;
-            this.saveData();
-            return items[index - 1]; // Return completed item
+            target = items[index - 1];
+        } else {
+            target = items.find(
+                (i) => i.task.toLowerCase().includes(keywordOrIndex.toLowerCase()) && !i.completed
+            );
         }
 
-        // Try to match by text
-        const found = items.find(i => i.task.toLowerCase().includes(keywordOrIndex.toLowerCase()) && !i.completed);
-        if (found) {
-            found.completed = true;
-            this.saveData();
-            return found;
-        }
-        return null;
+        if (!target) return null;
+
+        await db.update(todos)
+            .set({ completed: true })
+            .where(eq(todos.id, target.id));
+        return { ...target, completed: true };
     }
 
-    clearCompleted(userId: number) {
-        let items = this.getTodos(userId);
-        items = items.filter(i => !i.completed);
-        this.todos.set(userId, items);
-        this.saveData();
+    async clearCompleted(userId: number): Promise<void> {
+        await db.delete(todos)
+            .where(and(eq(todos.userId, userId), eq(todos.completed, true)));
     }
 }

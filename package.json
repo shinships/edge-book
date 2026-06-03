@@ -8,7 +8,11 @@
         "dev": "nodemon src/index.ts",
         "build": "tsc",
         "service:install": "node scripts/service-install.js",
-        "service:uninstall": "node scripts/service-uninstall.js"
+        "service:uninstall": "node scripts/service-uninstall.js",
+        "db:push": "drizzle-kit push",
+        "db:generate": "drizzle-kit generate",
+        "db:migrate": "drizzle-kit migrate",
+        "db:seed": "npx ts-node src/scripts/migrate-json-to-db.ts"
     },
     "keywords": [],
     "author": "",
@@ -16,17 +20,20 @@
     "dependencies": {
         "@types/express": "^5.0.6",
         "dotenv": "^16.3.1",
+        "drizzle-orm": "^0.45.2",
         "express": "^5.2.1",
         "googleapis": "^129.0.0",
         "grammy": "^1.20.1",
         "node-cron": "^4.2.1",
         "openai": "^4.73.0",
-        "pdfkit": "^0.18.0"
+        "pdfkit": "^0.18.0",
+        "postgres": "^3.4.9"
     },
     "devDependencies": {
         "@types/node": "^20.10.6",
         "@types/node-cron": "^3.0.11",
         "@types/pdfkit": "^0.17.6",
+        "drizzle-kit": "^0.31.10",
         "node-windows": "^1.0.0-beta.8",
         "nodemon": "^3.0.2",
         "ts-node": "^10.9.2",

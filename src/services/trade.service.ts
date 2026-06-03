@@ -1,28 +1,24 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import { db } from '../db';
+import { trades } from '../db/schema';
+import { eq, and, desc } from 'drizzle-orm';
 
 // --- Interfaces ---
 
 export interface TradeItem {
     id: string;
     userId: number;
-    ticker: string;            // 'BTC'
+    ticker: string;
     direction: 'long' | 'short';
     entryPrice: number;
     stopLoss?: number;
     takeProfit?: number;
     exitPrice?: number;
-    pnlPercent?: number;       // computed on close
+    pnlPercent?: number;
     status: 'open' | 'closed';
     notes?: string;
-    linkedResearch?: string[]; // ResearchItem IDs linked to this trade (Premium)
-    openedAt: string;          // ISO
-    closedAt?: string;         // ISO
-}
-
-export interface UserTrades {
-    userId: number;
-    items: TradeItem[];
+    linkedResearch?: string[];
+    openedAt: string;
+    closedAt?: string;
 }
 
 export interface TradeStats {
@@ -31,143 +27,124 @@ export interface TradeStats {
     closed: number;
     wins: number;
     losses: number;
-    winRate: number;           // 0-100
-    totalPnl: number;          // sum of pnlPercent (closed)
-    avgRR: number;             // average planned reward/risk
+    winRate: number;
+    totalPnl: number;
+    avgRR: number;
     best?: TradeItem;
     worst?: TradeItem;
 }
 
-// --- Advanced analytics (Premium) ---
-
 export interface TickerPerf {
     ticker: string;
-    trades: number;            // closed trades for this ticker
+    trades: number;
     wins: number;
     losses: number;
-    winRate: number;           // 0-100
-    totalPnl: number;          // sum of pnlPercent
-    avgPnl: number;            // mean pnlPercent
+    winRate: number;
+    totalPnl: number;
+    avgPnl: number;
 }
 
 export interface DirectionPerf {
     direction: 'long' | 'short';
     trades: number;
     wins: number;
-    winRate: number;           // 0-100
+    winRate: number;
     totalPnl: number;
 }
 
 export interface MonthPerf {
-    month: string;             // 'YYYY-MM' (by close date)
+    month: string;
     trades: number;
     totalPnl: number;
-    winRate: number;           // 0-100
+    winRate: number;
 }
 
 export interface TradeAnalytics {
     closedCount: number;
-    byTicker: TickerPerf[];    // sorted by totalPnl desc
+    byTicker: TickerPerf[];
     byDirection: DirectionPerf[];
-    byMonth: MonthPerf[];      // chronological
-    avgHoldHours: number | null; // mean closed-trade duration, null if unknown
+    byMonth: MonthPerf[];
+    avgHoldHours: number | null;
     bestTicker?: TickerPerf;
     worstTicker?: TickerPerf;
+}
+
+type TradeRow = typeof trades.$inferSelect;
+
+function toItem(row: TradeRow): TradeItem {
+    return {
+        id: row.id,
+        userId: row.userId,
+        ticker: row.ticker,
+        direction: row.direction as 'long' | 'short',
+        entryPrice: row.entryPrice,
+        stopLoss: row.stopLoss ?? undefined,
+        takeProfit: row.takeProfit ?? undefined,
+        exitPrice: row.exitPrice ?? undefined,
+        pnlPercent: row.pnlPercent ?? undefined,
+        status: row.status as 'open' | 'closed',
+        notes: row.notes ?? undefined,
+        linkedResearch: row.linkedResearch ?? [],
+        openedAt: row.openedAt.toISOString(),
+        closedAt: row.closedAt?.toISOString(),
+    };
 }
 
 // --- Service ---
 
 export class TradeService {
-    private dataPath: string;
-    private trades: Map<number, TradeItem[]>;
-
-    constructor() {
-        this.dataPath = path.resolve(__dirname, '../../data/trades.json');
-        this.trades = new Map();
-        this.loadData();
-    }
-
-    // --- Persistence ---
-
-    private loadData() {
-        if (fs.existsSync(this.dataPath)) {
-            try {
-                const rawData = fs.readFileSync(this.dataPath, 'utf-8');
-                const parsed = JSON.parse(rawData);
-                if (Array.isArray(parsed)) {
-                    parsed.forEach((u: UserTrades) => this.trades.set(u.userId, u.items));
-                }
-            } catch (error) {
-                console.error('Error loading trade data:', error);
-            }
-        }
-    }
-
-    private saveData() {
-        try {
-            const data: UserTrades[] = Array.from(this.trades.entries()).map(([userId, items]) => ({
-                userId,
-                items,
-            }));
-            // Ensure data directory exists
-            const dir = path.dirname(this.dataPath);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            // Atomic write: write to a temp file then rename, so a crash mid-write
-            // can't truncate the existing journal. (Does not guard against multiple
-            // concurrent bot instances — that requires a real DB; run one instance.)
-            const tmp = `${this.dataPath}.tmp`;
-            fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-            fs.renameSync(tmp, this.dataPath);
-        } catch (error) {
-            console.error('Error saving trade data:', error);
-        }
-    }
-
     private generateId(): string {
         return `t_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     }
 
-    // --- Accessors ---
-
-    getTrades(userId: number): TradeItem[] {
-        if (!this.trades.has(userId)) {
-            this.trades.set(userId, []);
-        }
-        return this.trades.get(userId)!;
+    async getTrades(userId: number): Promise<TradeItem[]> {
+        const rows = await db.select()
+            .from(trades)
+            .where(eq(trades.userId, userId))
+            .orderBy(trades.openedAt);
+        return rows.map(toItem);
     }
 
-    getOpenTrades(userId: number): TradeItem[] {
-        return this.getTrades(userId).filter((t) => t.status === 'open');
+    async getOpenTrades(userId: number): Promise<TradeItem[]> {
+        const rows = await db.select()
+            .from(trades)
+            .where(and(eq(trades.userId, userId), eq(trades.status, 'open')))
+            .orderBy(trades.openedAt);
+        return rows.map(toItem);
     }
 
-    getClosedTrades(userId: number): TradeItem[] {
-        return this.getTrades(userId).filter((t) => t.status === 'closed');
+    async getClosedTrades(userId: number): Promise<TradeItem[]> {
+        const rows = await db.select()
+            .from(trades)
+            .where(and(eq(trades.userId, userId), eq(trades.status, 'closed')))
+            .orderBy(trades.openedAt);
+        return rows.map(toItem);
     }
 
-    getTradeById(userId: number, tradeId: string): TradeItem | undefined {
-        return this.getTrades(userId).find((t) => t.id === tradeId);
+    async getTradeById(userId: number, tradeId: string): Promise<TradeItem | undefined> {
+        const [row] = await db.select()
+            .from(trades)
+            .where(and(eq(trades.id, tradeId), eq(trades.userId, userId)));
+        return row ? toItem(row) : undefined;
     }
 
-    // --- Mutations ---
+    async linkResearch(userId: number, tradeId: string, researchId: string): Promise<TradeItem | null> {
+        const [row] = await db.select()
+            .from(trades)
+            .where(and(eq(trades.id, tradeId), eq(trades.userId, userId)));
+        if (!row) return null;
 
-    /**
-     * Link a research item to a trade (Premium). Idempotent — a research id is
-     * stored at most once. Returns the updated trade, or null if not found.
-     */
-    linkResearch(userId: number, tradeId: string, researchId: string): TradeItem | null {
-        const trade = this.getTradeById(userId, tradeId);
-        if (!trade) return null;
-        if (!trade.linkedResearch) trade.linkedResearch = [];
-        if (!trade.linkedResearch.includes(researchId)) {
-            trade.linkedResearch.push(researchId);
-            this.saveData();
-        }
-        return trade;
+        const linked = row.linkedResearch ?? [];
+        if (linked.includes(researchId)) return toItem(row);
+
+        const [updated] = await db.update(trades)
+            .set({ linkedResearch: [...linked, researchId] })
+            .where(eq(trades.id, tradeId))
+            .returning();
+        return toItem(updated!);
     }
 
-    openTrade(
+    async openTrade(
         userId: number,
         data: {
             ticker: string;
@@ -177,13 +154,12 @@ export class TradeService {
             takeProfit?: number;
             notes?: string;
         }
-    ): TradeItem | null {
-        // Reject invalid prices to avoid NaN/Infinity poisoning PnL & stats later.
+    ): Promise<TradeItem | null> {
         if (!Number.isFinite(data.entryPrice) || data.entryPrice <= 0) return null;
         if (data.stopLoss !== undefined && (!Number.isFinite(data.stopLoss) || data.stopLoss <= 0)) return null;
         if (data.takeProfit !== undefined && (!Number.isFinite(data.takeProfit) || data.takeProfit <= 0)) return null;
-        const items = this.getTrades(userId);
-        const trade: TradeItem = {
+
+        const [row] = await db.insert(trades).values({
             id: this.generateId(),
             userId,
             ticker: data.ticker.toUpperCase(),
@@ -193,62 +169,57 @@ export class TradeService {
             takeProfit: data.takeProfit,
             status: 'open',
             notes: data.notes,
-            openedAt: new Date().toISOString(),
-        };
-        items.push(trade);
-        this.saveData();
-        return trade;
+            linkedResearch: [],
+            openedAt: new Date(),
+        }).returning();
+        return toItem(row!);
     }
 
-    /**
-     * Close the most-recent OPEN trade for a ticker.
-     * Provide either an absolute exit `price` or a `percent` PnL directly.
-     */
-    closeTrade(
+    async closeTrade(
         userId: number,
         ticker: string,
         exit: { price?: number; percent?: number }
-    ): TradeItem | null {
-        const items = this.getTrades(userId);
+    ): Promise<TradeItem | null> {
         const upper = ticker.toUpperCase();
-        // Most recent open trade for this ticker
-        const trade = [...items]
-            .reverse()
-            .find((t) => t.status === 'open' && t.ticker === upper);
-        if (!trade) return null;
+        const [row] = await db.select()
+            .from(trades)
+            .where(and(
+                eq(trades.userId, userId),
+                eq(trades.ticker, upper),
+                eq(trades.status, 'open')
+            ))
+            .orderBy(desc(trades.openedAt))
+            .limit(1);
+        if (!row) return null;
 
+        const trade = toItem(row);
         let pnl: number;
+        let exitPrice: number;
+
         if (typeof exit.percent === 'number') {
             if (!Number.isFinite(exit.percent)) return null;
             pnl = exit.percent;
-            // exitPrice derived from entry + pnl for record-keeping
-            trade.exitPrice =
-                trade.direction === 'long'
-                    ? trade.entryPrice * (1 + pnl / 100)
-                    : trade.entryPrice * (1 - pnl / 100);
+            exitPrice = trade.direction === 'long'
+                ? trade.entryPrice * (1 + pnl / 100)
+                : trade.entryPrice * (1 - pnl / 100);
         } else if (typeof exit.price === 'number') {
             if (!Number.isFinite(exit.price) || exit.price <= 0) return null;
-            trade.exitPrice = exit.price;
+            exitPrice = exit.price;
             const raw = ((exit.price - trade.entryPrice) / trade.entryPrice) * 100;
             pnl = trade.direction === 'long' ? raw : -raw;
         } else {
             return null;
         }
 
-        trade.pnlPercent = Math.round(pnl * 100) / 100;
-        trade.status = 'closed';
-        trade.closedAt = new Date().toISOString();
-        this.saveData();
-        return trade;
+        const pnlPercent = Math.round(pnl * 100) / 100;
+
+        const [updated] = await db.update(trades)
+            .set({ status: 'closed', exitPrice, pnlPercent, closedAt: new Date() })
+            .where(eq(trades.id, trade.id))
+            .returning();
+        return toItem(updated!);
     }
 
-    // --- Stats ---
-
-    /**
-     * Planned reward/risk from TP/SL relative to entry, direction-aware.
-     * Returns null if TP/SL missing or the setup is reversed-logic
-     * (e.g. a long with TP below entry), so RR isn't computed for invalid setups.
-     */
     private plannedRR(t: TradeItem): number | null {
         if (t.takeProfit === undefined || t.stopLoss === undefined) return null;
         let reward: number;
@@ -264,8 +235,8 @@ export class TradeService {
         return reward / risk;
     }
 
-    getStats(userId: number): TradeStats {
-        const all = this.getTrades(userId);
+    async getStats(userId: number): Promise<TradeStats> {
+        const all = await this.getTrades(userId);
         const closed = all.filter((t) => t.status === 'closed');
         const wins = closed.filter((t) => (t.pnlPercent ?? 0) > 0);
         const losses = closed.filter((t) => (t.pnlPercent ?? 0) <= 0);
@@ -302,21 +273,13 @@ export class TradeService {
         };
     }
 
-    // --- Advanced analytics (Premium) ---
-
-    /**
-     * Performance breakdown over CLOSED trades: by ticker, by direction,
-     * by calendar month (close date), plus average hold duration.
-     * A win is pnlPercent > 0. Empty buckets are omitted.
-     */
-    getAnalytics(userId: number): TradeAnalytics {
-        const closed = this.getClosedTrades(userId);
+    async getAnalytics(userId: number): Promise<TradeAnalytics> {
+        const closed = await this.getClosedTrades(userId);
 
         const round2 = (n: number) => Math.round(n * 100) / 100;
         const winRate = (wins: number, total: number) =>
             total > 0 ? Math.round((wins / total) * 1000) / 10 : 0;
 
-        // --- By ticker ---
         const tickerMap = new Map<string, TradeItem[]>();
         for (const t of closed) {
             if (!tickerMap.has(t.ticker)) tickerMap.set(t.ticker, []);
@@ -338,7 +301,6 @@ export class TradeService {
             })
             .sort((a, b) => b.totalPnl - a.totalPnl);
 
-        // --- By direction ---
         const byDirection: DirectionPerf[] = (['long', 'short'] as const)
             .map((direction) => {
                 const items = closed.filter((t) => t.direction === direction);
@@ -353,10 +315,9 @@ export class TradeService {
             })
             .filter((d) => d.trades > 0);
 
-        // --- By month (close date) ---
         const monthMap = new Map<string, TradeItem[]>();
         for (const t of closed) {
-            const month = (t.closedAt ?? t.openedAt).slice(0, 7); // 'YYYY-MM'
+            const month = (t.closedAt ?? t.openedAt).slice(0, 7);
             if (!monthMap.has(month)) monthMap.set(month, []);
             monthMap.get(month)!.push(t);
         }
@@ -372,7 +333,6 @@ export class TradeService {
             })
             .sort((a, b) => a.month.localeCompare(b.month));
 
-        // --- Average hold duration ---
         const holdHours = closed
             .filter((t) => t.closedAt)
             .map((t) => (new Date(t.closedAt!).getTime() - new Date(t.openedAt).getTime()) / 3_600_000)

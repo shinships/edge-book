@@ -29,6 +29,9 @@ export const config = {
         .split(',')
         .map((s) => parseInt(s.trim(), 10))
         .filter((n) => Number.isFinite(n)),
+
+    // --- Database ---
+    databaseUrl: process.env.DATABASE_URL || '',
 };
 
 

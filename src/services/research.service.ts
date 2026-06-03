@@ -1,5 +1,6 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import { db } from '../db';
+import { researchItems } from '../db/schema';
+import { eq, and, ilike, gte, desc } from 'drizzle-orm';
 
 // --- Interfaces ---
 
@@ -7,19 +8,14 @@ export interface ResearchItem {
     id: string;
     userId: number;
     content: string;
-    sourceName?: string;       // Forwarded from channel/user name
+    sourceName?: string;
     sourceUrl?: string;
-    tickers: string[];         // ['BTC', 'ETH', 'SOL']
-    categories: string[];     // ['technical', 'macro', 'on-chain', 'fundamental', 'alpha']
-    sentiment: number;         // -1.0 (bearish) to 1.0 (bullish), 0 = neutral
+    tickers: string[];
+    categories: string[];
+    sentiment: number;
     isStarred: boolean;
-    googleDocId?: string;      // linked Google Doc
-    createdAt: string;         // ISO string
-}
-
-export interface UserResearch {
-    userId: number;
-    items: ResearchItem[];
+    googleDocId?: string;
+    createdAt: string;
 }
 
 // --- Common crypto tickers for regex-based extraction ---
@@ -41,10 +37,8 @@ const KNOWN_TICKERS = [
     'DXY', 'XAUUSD', 'GOLD',
 ];
 
-// Build a set for O(1) lookup
 const TICKER_SET = new Set(KNOWN_TICKERS);
 
-// --- Category keywords ---
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
     technical: ['support', 'resistance', 'breakout', 'breakdown', 'RSI', 'MACD', 'EMA', 'SMA',
         'fibonacci', 'fib', 'trendline', 'channel', 'pattern', 'chart', 'candle', 'volume',
@@ -65,71 +59,39 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
         'kèo', 'signal', 'call'],
 };
 
+type ResearchRow = typeof researchItems.$inferSelect;
+
+function toItem(row: ResearchRow): ResearchItem {
+    return {
+        id: row.id,
+        userId: row.userId,
+        content: row.content,
+        sourceName: row.sourceName ?? undefined,
+        sourceUrl: row.sourceUrl ?? undefined,
+        tickers: row.tickers ?? [],
+        categories: row.categories ?? [],
+        sentiment: row.sentiment,
+        isStarred: row.isStarred,
+        googleDocId: row.googleDocId ?? undefined,
+        createdAt: row.createdAt.toISOString(),
+    };
+}
+
 // --- Service ---
 
 export class ResearchService {
-    private dataPath: string;
-    private research: Map<number, ResearchItem[]>;
+    // --- Auto-tagging (pure, no DB) ---
 
-    constructor() {
-        this.dataPath = path.resolve(__dirname, '../../data/research.json');
-        this.research = new Map();
-        this.loadData();
-    }
-
-    // --- Persistence ---
-
-    private loadData() {
-        if (fs.existsSync(this.dataPath)) {
-            try {
-                const rawData = fs.readFileSync(this.dataPath, 'utf-8');
-                const parsed = JSON.parse(rawData);
-                if (Array.isArray(parsed)) {
-                    parsed.forEach((u: UserResearch) => this.research.set(u.userId, u.items));
-                }
-            } catch (error) {
-                console.error('Error loading research data:', error);
-            }
-        }
-    }
-
-    private saveData() {
-        try {
-            const data: UserResearch[] = Array.from(this.research.entries()).map(([userId, items]) => ({
-                userId,
-                items,
-            }));
-            // Ensure data directory exists
-            const dir = path.dirname(this.dataPath);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            fs.writeFileSync(this.dataPath, JSON.stringify(data, null, 2));
-        } catch (error) {
-            console.error('Error saving research data:', error);
-        }
-    }
-
-    // --- Auto-tagging ---
-
-    /**
-     * Extract ticker symbols from text using regex.
-     * Matches $BTC, BTC/USDT, BTC-PERP, and standalone known tickers.
-     */
     extractTickers(text: string): string[] {
         const found = new Set<string>();
 
-        // Pattern 1: $BTC style
         const dollarPattern = /\$([A-Z]{2,10})/gi;
         let match;
         while ((match = dollarPattern.exec(text)) !== null) {
             const ticker = match[1].toUpperCase();
-            if (TICKER_SET.has(ticker)) {
-                found.add(ticker);
-            }
+            if (TICKER_SET.has(ticker)) found.add(ticker);
         }
 
-        // Pattern 2: BTC/USDT, ETH/BTC pair style
         const pairPattern = /\b([A-Z]{2,10})\s*[\/\-]\s*([A-Z]{2,10})\b/gi;
         while ((match = pairPattern.exec(text)) !== null) {
             const t1 = match[1].toUpperCase();
@@ -138,18 +100,13 @@ export class ResearchService {
             if (TICKER_SET.has(t2)) found.add(t2);
         }
 
-        // Pattern 3: Standalone known tickers (word boundary match)
         for (const ticker of KNOWN_TICKERS) {
-            // Only match tickers with 3+ chars to avoid false positives (e.g. "W", "OP")
             if (ticker.length >= 3) {
                 const regex = new RegExp(`\\b${ticker}\\b`, 'gi');
-                if (regex.test(text)) {
-                    found.add(ticker);
-                }
+                if (regex.test(text)) found.add(ticker);
             }
         }
 
-        // Remove stablecoins from results (they're noise in research context)
         found.delete('USDT');
         found.delete('USDC');
         found.delete('DAI');
@@ -158,33 +115,19 @@ export class ResearchService {
         return Array.from(found);
     }
 
-    /**
-     * Classify content into categories based on keyword matching.
-     */
     classifyCategories(text: string): string[] {
         const categories: string[] = [];
         const lowerText = text.toLowerCase();
 
         for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
-            const matchCount = keywords.filter(kw => lowerText.includes(kw.toLowerCase())).length;
-            // Require at least 2 keyword matches to reduce false positives
-            if (matchCount >= 2) {
-                categories.push(category);
-            }
+            const matchCount = keywords.filter((kw) => lowerText.includes(kw.toLowerCase())).length;
+            if (matchCount >= 2) categories.push(category);
         }
 
-        // Default category if nothing matches
-        if (categories.length === 0) {
-            categories.push('general');
-        }
-
+        if (categories.length === 0) categories.push('general');
         return categories;
     }
 
-    /**
-     * Simple rule-based sentiment scoring.
-     * Returns -1.0 (bearish) to 1.0 (bullish), 0 = neutral.
-     */
     scoreSentiment(text: string): number {
         const lowerText = text.toLowerCase();
 
@@ -196,23 +139,18 @@ export class ResearchService {
             'ATL', 'correction', 'drop', 'red', 'weak', 'fear'];
 
         let score = 0;
-        bullishWords.forEach(w => { if (lowerText.includes(w)) score += 0.15; });
-        bearishWords.forEach(w => { if (lowerText.includes(w)) score -= 0.15; });
+        bullishWords.forEach((w) => { if (lowerText.includes(w)) score += 0.15; });
+        bearishWords.forEach((w) => { if (lowerText.includes(w)) score -= 0.15; });
 
-        // Clamp to [-1, 1]
         return Math.max(-1, Math.min(1, Math.round(score * 100) / 100));
     }
 
     // --- CRUD Operations ---
 
-    /**
-     * Add a new research item with auto-tagging.
-     */
-    addItem(userId: number, content: string, sourceName?: string): ResearchItem {
-        const items = this.getItems(userId);
-
-        const newItem: ResearchItem = {
-            id: this.generateId(),
+    async addItem(userId: number, content: string, sourceName?: string): Promise<ResearchItem> {
+        const id = `r_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        const [row] = await db.insert(researchItems).values({
+            id,
             userId,
             content,
             sourceName,
@@ -220,112 +158,102 @@ export class ResearchService {
             categories: this.classifyCategories(content),
             sentiment: this.scoreSentiment(content),
             isStarred: false,
-            createdAt: new Date().toISOString(),
-        };
-
-        items.push(newItem);
-        this.saveData();
-        return newItem;
+            createdAt: new Date(),
+        }).returning();
+        return toItem(row!);
     }
 
-    /**
-     * Get all items for a user.
-     */
-    getItems(userId: number): ResearchItem[] {
-        if (!this.research.has(userId)) {
-            this.research.set(userId, []);
-        }
-        return this.research.get(userId)!;
+    async getItems(userId: number): Promise<ResearchItem[]> {
+        const rows = await db.select()
+            .from(researchItems)
+            .where(eq(researchItems.userId, userId))
+            .orderBy(researchItems.createdAt);
+        return rows.map(toItem);
     }
 
-    /**
-     * Get item by ID.
-     */
-    getItemById(userId: number, itemId: string): ResearchItem | undefined {
-        return this.getItems(userId).find(i => i.id === itemId);
+    async getItemById(userId: number, itemId: string): Promise<ResearchItem | undefined> {
+        const [row] = await db.select()
+            .from(researchItems)
+            .where(and(eq(researchItems.id, itemId), eq(researchItems.userId, userId)));
+        return row ? toItem(row) : undefined;
     }
 
-    /**
-     * Star/unstar an item. Returns the updated item or null if not found.
-     */
-    toggleStar(userId: number, itemId: string): ResearchItem | null {
-        const item = this.getItemById(userId, itemId);
-        if (item) {
-            item.isStarred = !item.isStarred;
-            this.saveData();
-            return item;
-        }
-        return null;
+    async toggleStar(userId: number, itemId: string): Promise<ResearchItem | null> {
+        const [existing] = await db.select()
+            .from(researchItems)
+            .where(and(eq(researchItems.id, itemId), eq(researchItems.userId, userId)));
+        if (!existing) return null;
+        const [updated] = await db.update(researchItems)
+            .set({ isStarred: !existing.isStarred })
+            .where(eq(researchItems.id, itemId))
+            .returning();
+        return toItem(updated!);
     }
 
-    /**
-     * Star the most recent item for a user.
-     */
-    starLatest(userId: number): ResearchItem | null {
-        const items = this.getItems(userId);
-        if (items.length === 0) return null;
-        const latest = items[items.length - 1];
-        latest.isStarred = true;
-        this.saveData();
-        return latest;
+    async starLatest(userId: number): Promise<ResearchItem | null> {
+        const [latest] = await db.select()
+            .from(researchItems)
+            .where(eq(researchItems.userId, userId))
+            .orderBy(desc(researchItems.createdAt))
+            .limit(1);
+        if (!latest) return null;
+        const [updated] = await db.update(researchItems)
+            .set({ isStarred: true })
+            .where(eq(researchItems.id, latest.id))
+            .returning();
+        return toItem(updated!);
     }
 
-    /**
-     * Search items by ticker symbol.
-     */
-    searchByTicker(userId: number, ticker: string): ResearchItem[] {
-        const upperTicker = ticker.toUpperCase();
-        return this.getItems(userId).filter(
-            item => item.tickers.includes(upperTicker)
-        );
+    async searchByTicker(userId: number, ticker: string): Promise<ResearchItem[]> {
+        const upper = ticker.toUpperCase();
+        // Use array overlap — research items whose tickers array contains this ticker
+        const all = await this.getItems(userId);
+        return all.filter((item) => item.tickers.includes(upper));
     }
 
-    /**
-     * Search items by keyword (full-text search on content).
-     */
-    searchByKeyword(userId: number, keyword: string): ResearchItem[] {
-        const lowerKeyword = keyword.toLowerCase();
-        return this.getItems(userId).filter(
-            item => item.content.toLowerCase().includes(lowerKeyword)
-        );
+    async searchByKeyword(userId: number, keyword: string): Promise<ResearchItem[]> {
+        const rows = await db.select()
+            .from(researchItems)
+            .where(and(
+                eq(researchItems.userId, userId),
+                ilike(researchItems.content, `%${keyword}%`)
+            ));
+        return rows.map(toItem);
     }
 
-    /**
-     * Search items by category.
-     */
-    searchByCategory(userId: number, category: string): ResearchItem[] {
+    async searchByCategory(userId: number, category: string): Promise<ResearchItem[]> {
         const lowerCat = category.toLowerCase();
-        return this.getItems(userId).filter(
-            item => item.categories.includes(lowerCat)
-        );
+        const all = await this.getItems(userId);
+        return all.filter((item) => item.categories.includes(lowerCat));
     }
 
-    /**
-     * Get items from the last N hours (for digest).
-     */
-    getRecentItems(userId: number, hours: number = 24): ResearchItem[] {
-        const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-        return this.getItems(userId).filter(item => item.createdAt >= cutoff);
+    async getRecentItems(userId: number, hours = 24): Promise<ResearchItem[]> {
+        const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+        const rows = await db.select()
+            .from(researchItems)
+            .where(and(
+                eq(researchItems.userId, userId),
+                gte(researchItems.createdAt, cutoff)
+            ))
+            .orderBy(researchItems.createdAt);
+        return rows.map(toItem);
     }
 
-    /**
-     * Get starred items.
-     */
-    getStarredItems(userId: number): ResearchItem[] {
-        return this.getItems(userId).filter(item => item.isStarred);
+    async getStarredItems(userId: number): Promise<ResearchItem[]> {
+        const rows = await db.select()
+            .from(researchItems)
+            .where(and(eq(researchItems.userId, userId), eq(researchItems.isStarred, true)))
+            .orderBy(researchItems.createdAt);
+        return rows.map(toItem);
     }
 
-    /**
-     * Get digest data: items grouped by ticker with counts.
-     */
-    getDigestData(userId: number, hours: number = 24): {
+    async getDigestData(userId: number, hours = 24): Promise<{
         totalItems: number;
         topTickers: { ticker: string; count: number; items: ResearchItem[] }[];
         uncategorized: ResearchItem[];
-    } {
-        const recentItems = this.getRecentItems(userId, hours);
+    }> {
+        const recentItems = await this.getRecentItems(userId, hours);
 
-        // Count by ticker
         const tickerMap = new Map<string, ResearchItem[]>();
         const uncategorized: ResearchItem[] = [];
 
@@ -340,41 +268,31 @@ export class ResearchService {
             }
         }
 
-        // Sort by count descending
         const topTickers = Array.from(tickerMap.entries())
             .map(([ticker, items]) => ({ ticker, count: items.length, items }))
             .sort((a, b) => b.count - a.count);
 
-        return {
-            totalItems: recentItems.length,
-            topTickers,
-            uncategorized,
-        };
+        return { totalItems: recentItems.length, topTickers, uncategorized };
     }
 
-    /**
-     * Get weekly report data: this week's activity vs the previous week,
-     * with per-ticker sentiment shift. Used by the Weekly Report (Pro).
-     */
-    getWeeklyReportData(userId: number): {
-        totalItems: number;        // last 7 days
-        prevTotalItems: number;    // the 7 days before that
+    async getWeeklyReportData(userId: number): Promise<{
+        totalItems: number;
+        prevTotalItems: number;
         topTickers: { ticker: string; count: number; items: ResearchItem[] }[];
         sentimentShifts: { ticker: string; thisAvg: number; prevAvg: number | null; shift: number | null; count: number }[];
-    } {
+    }> {
         const now = Date.now();
         const weekMs = 7 * 24 * 60 * 60 * 1000;
         const weekAgo = new Date(now - weekMs).toISOString();
         const twoWeeksAgo = new Date(now - 2 * weekMs).toISOString();
 
-        const items = this.getItems(userId);
+        const items = await this.getItems(userId);
         const thisWeek = items.filter((i) => i.createdAt >= weekAgo);
         const prevWeek = items.filter((i) => i.createdAt >= twoWeeksAgo && i.createdAt < weekAgo);
 
         const avgSentiment = (list: ResearchItem[]): number | null =>
             list.length === 0 ? null : Math.round((list.reduce((s, i) => s + i.sentiment, 0) / list.length) * 100) / 100;
 
-        // Group this week's items by ticker (mirrors getDigestData).
         const tickerMap = new Map<string, ResearchItem[]>();
         for (const item of thisWeek) {
             for (const ticker of item.tickers) {
@@ -386,7 +304,6 @@ export class ResearchService {
             .map(([ticker, items]) => ({ ticker, count: items.length, items }))
             .sort((a, b) => b.count - a.count);
 
-        // Sentiment shift = this week's avg sentiment minus previous week's, per top ticker.
         const sentimentShifts = topTickers.slice(0, 8).map(({ ticker, items, count }) => {
             const thisAvg = avgSentiment(items) ?? 0;
             const prevItems = prevWeek.filter((i) => i.tickers.includes(ticker));
@@ -403,22 +320,18 @@ export class ResearchService {
         };
     }
 
-    /**
-     * Get stats for a user.
-     */
-    getStats(userId: number): {
+    async getStats(userId: number): Promise<{
         totalItems: number;
         starredCount: number;
         topTickers: { ticker: string; count: number }[];
         todayCount: number;
         thisWeekCount: number;
-    } {
-        const items = this.getItems(userId);
+    }> {
+        const items = await this.getItems(userId);
         const now = new Date();
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
         const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-        // Count tickers across all items
         const tickerCounts = new Map<string, number>();
         for (const item of items) {
             for (const ticker of item.tickers) {
@@ -433,32 +346,27 @@ export class ResearchService {
 
         return {
             totalItems: items.length,
-            starredCount: items.filter(i => i.isStarred).length,
+            starredCount: items.filter((i) => i.isStarred).length,
             topTickers,
-            todayCount: items.filter(i => i.createdAt >= todayStart).length,
-            thisWeekCount: items.filter(i => i.createdAt >= weekStart).length,
+            todayCount: items.filter((i) => i.createdAt >= todayStart).length,
+            thisWeekCount: items.filter((i) => i.createdAt >= weekStart).length,
         };
     }
 
-    /**
-     * Get count of items saved today (for rate limiting).
-     */
-    getTodayCount(userId: number): number {
+    async getTodayCount(userId: number): Promise<number> {
         const now = new Date();
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-        return this.getItems(userId).filter(i => i.createdAt >= todayStart).length;
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const rows = await db.select()
+            .from(researchItems)
+            .where(and(
+                eq(researchItems.userId, userId),
+                gte(researchItems.createdAt, todayStart)
+            ));
+        return rows.length;
     }
 
-    /**
-     * Get all user IDs that have research items (for digest cron).
-     */
-    getAllUserIds(): number[] {
-        return Array.from(this.research.keys());
-    }
-
-    // --- Utility ---
-
-    private generateId(): string {
-        return `r_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    async getAllUserIds(): Promise<number[]> {
+        const rows = await db.selectDistinct({ userId: researchItems.userId }).from(researchItems);
+        return rows.map((r) => r.userId);
     }
 }
