@@ -19,31 +19,33 @@
 | Auth         | Google Service Account (`service_account.json`) |
 | Config       | `dotenv` (`.env` file)                        |
 | Dev          | `nodemon` + `ts-node` for hot-reload          |
+| Database     | Drizzle ORM (`drizzle-orm` + `postgres`) + PostgreSQL (Supabase) — `drizzle-kit` for schema push/migration |
 
 ## Directory Structure
 
 ```
 edge-book/
 ├── .env                        # Secrets — NEVER commit
+├── .env.example                # Template with all variables (cp to .env, then fill in)
 ├── service_account.json        # Google SA key — NEVER commit
 ├── package.json
 ├── tsconfig.json
 ├── nodemon.json
+├── drizzle.config.ts           # Drizzle ORM configuration (schema path, dialect, DB credentials)
 ├── PLAN.md                     # Product & monetization roadmap
 ├── service-entry.js            # Stable launcher for the Windows Service (requires ./dist/index.js)
 ├── scripts/
 │   ├── service-install.js      # Install + start the "EdgeBookBot" Windows Service (elevated)
 │   └── service-uninstall.js    # Stop + remove the service (elevated)
 ├── daemon/                     # node-windows winsw exe/config/logs (gitignored, created on install)
-├── data/
-│   ├── users.json              # Persisted user profiles & doc aliases
-│   ├── todos.json              # Persisted to-do items (created at runtime)
-│   ├── research.json           # Research items with tags, sentiment (created at runtime)
-│   ├── plans.json              # User subscription plans (created at runtime)
-│   ├── trades.json             # Trade Journal entries per user (created at runtime)
-│   └── theses.json             # Thesis tracker entries per user (created at runtime)
+├── data/                       # Legacy JSON backup files (gitignored); used by db:seed to seed PostgreSQL
 ├── src/
 │   ├── config.ts               # Loads env vars, validates required keys
+│   ├── db/
+│   │   ├── index.ts            # Drizzle connection pool (exports `db`)
+│   │   └── schema.ts           # DB schema: users, plans, research_items, trades, theses, todos
+│   ├── scripts/
+│   │   └── migrate-json-to-db.ts # One-time seed: data/*.json → PostgreSQL
 │   ├── index.ts                # Entry point — bot commands, message handlers, cron jobs
 │   ├── webhook.server.ts       # Express HTTP server for LemonSqueezy payment webhooks
 │   ├── services/
@@ -54,9 +56,9 @@ edge-book/
 │   │   ├── report.service.ts   # PDF trade report generation via pdfkit (Premium export)
 │   │   ├── research.service.ts # Research items: auto-tagging, search, star, digest data
 │   │   ├── thesis.service.ts   # Thesis tracker: record theses + conflict detection vs research sentiment (Premium)
-│   │   ├── todo.service.ts     # File-based to-do CRUD per user
+│   │   ├── todo.service.ts     # To-do CRUD per user (PostgreSQL)
 │   │   ├── trade.service.ts    # Trade Journal: open/close trades, PnL calc, stats, analytics (Pro/Premium)
-│   │   └── user.service.ts     # File-based user profile management & doc aliases
+│   │   └── user.service.ts     # User profile management & doc aliases (PostgreSQL)
 │   ├── test-ai.ts              # Manual test: verify Vertex-Key API connection
 │   ├── test-calendar.ts        # Manual test: create calendar event
 │   └── test-drive.ts           # Manual test: upload file to Drive
@@ -82,6 +84,12 @@ npm start
 npx ts-node src/test-ai.ts
 npx ts-node src/test-calendar.ts
 npx ts-node src/test-drive.ts
+
+# Database setup (requires DATABASE_URL in .env)
+npm run db:push        # push schema to Supabase/Postgres (creates/updates tables)
+npm run db:generate    # generate Drizzle migration files
+npm run db:migrate     # run pending migrations
+npm run db:seed        # seed DB from legacy data/*.json files (one-time)
 
 # Windows Service (run in background + on boot) — run from an ELEVATED shell
 npm run build              # ensure dist/ is fresh first
@@ -119,6 +127,7 @@ EdgeBook can run as a background Windows service (auto-start on boot, auto-resta
 | `LEMONSQUEEZY_WEBHOOK_SECRET` | Optional | Webhook signing secret for HMAC verify   |
 | `WEBHOOK_PORT`                | Optional | Port for webhook Express server (default: `3000`) |
 | `ADMIN_USER_IDS`              | Optional | Comma-separated Telegram user IDs treated as admins (always Premium access) |
+| `DATABASE_URL`                | ✅       | PostgreSQL connection string (Supabase pooler URL)   |
 
 Both `TELEGRAM_BOT_TOKEN` and `VERTEX_KEY_API_KEY` are validated on startup — app exits if missing.
 LemonSqueezy keys are optional; if absent, the `/upgrade` command shows a "not configured" message.
@@ -130,12 +139,12 @@ LemonSqueezy keys are optional; if absent, the `/upgrade` command shows a "not c
 All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers in `index.ts`. Message routing uses **regex matching + keyword detection** in this priority order:
 
 1. **Doc management**: `Add Doc <alias> <id>`, `Use Doc <alias>`, `Current Doc` (replies with the active doc's alias + ID + a clickable `docs.google.com` link; falls back to `GOOGLE_DOC_ID` default)
-2. **To-Do List**: Quick task management via `Add Task: [content]` and `List Tasks`.
+2. **To-Do List**: Quick task management via `Add Task: [content]`, `List Tasks` / `Todo List`, and `Complete Task: <index-or-keyword>`.
 3. **Research OS commands** (new):
    - `Search: <keyword>` — full-text search in saved research (Pro)
    - `Tag: <ticker>` — filter by ticker symbol (Pro)
    - `Digest` / `Daily Digest` — AI-generated daily summary (Pro)
-   - `Weekly Report` / `Weekly` — 7-day report: top tickers, per-ticker sentiment shift vs last week, key insights (Pro)
+   - `Weekly Report` / `Weekly` / `Weekly Digest` — 7-day report: top tickers, per-ticker sentiment shift vs last week, key insights (Pro)
    - `Stats` — research statistics and top tickers
    - `Starred` / `Bookmarks` — view bookmarked items
    - `Star` / `⭐` — bookmark the most recent research item
@@ -167,12 +176,12 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 
 - **AIService**: Uses OpenAI SDK (`openai` package) with Vertex-Key.com as base URL. Manages per-user conversation history (messages array) with personalized system instructions. History is in-memory (Map, max 50 messages), not persisted. Post-processes responses to strip markdown formatting (bold, headers) and escape underscores. Also provides `generateDigest()`, `generateWeeklyReport()` (top tickers + sentiment shift) and `askAboutResearch()` for the Research OS, plus `generateTradeInsight()` for trade analytics.
 - **GoogleService**: Thin wrappers around Google APIs. Uses Service Account auth. Calendar defaults to `Asia/Ho_Chi_Minh` timezone.
-- **ResearchService** *(new)*: File-based persistence to `data/research.json`. Manages research items with auto-tagging (tickers via regex), category classification (keyword-based), sentiment scoring (rule-based), search (by keyword/ticker/category), star/bookmark, digest data aggregation, and weekly-report data (`getWeeklyReportData` — this-week vs last-week activity + per-ticker sentiment shift).
-- **PlanService** *(new)*: File-based persistence to `data/plans.json`. Manages subscription tiers (free/pro/premium), daily forward rate limiting, feature gating, and plan expiration. Accepts an admin-ID list (from `config.adminUserIds` / `ADMIN_USER_IDS`); admins are always treated as Premium (`isAdmin()`, `effectiveTier()` → all feature gates pass, unlimited forwards, always digest-eligible).
-- **UserService**: File-based persistence to `data/users.json`. Supports multi-doc aliases (e.g., `work` → `<docId>`). Auto-sets first added doc as active.
-- **TodoService**: File-based persistence to `data/todos.json`. Supports completion by index (1-based) or keyword search.
-- **TradeService** *(new)*: File-based persistence to `data/trades.json`. Manages the Trade Journal — open/close trades, auto-computes PnL% (price- or percent-based, direction-aware), and aggregates stats (win rate, total PnL, avg planned RR, best/worst). Pro-gated via `canTrade`. Also supports **research-to-trade link** (`linkResearch`/`getTradeById`, `linkedResearch: string[]` on each trade) — Premium-gated via `canLinkResearch`. On `Close:`, Premium users get an inline keyboard of recent research matching the ticker (callback `linkres:<tradeId>:<researchId>`); the `Trades` list shows a 🔗N tag for trades with links. Also provides **advanced analytics** (`getAnalytics` → breakdown by ticker/direction/month + avg hold duration over closed trades) — Premium-gated via `canAnalytics`, surfaced by the `Trade Analytics` command with an AI insight from `AIService.generateTradeInsight`.
-- **ThesisService** *(new)*: File-based persistence to `data/theses.json`. Records per-user theses (`ticker`, `stance` bullish/bearish, `text`) and detects contradictions: `findConflicts(userId, ticker, sentiment)` returns active theses whose stance is clearly opposed to a newly-saved research item's sentiment (±0.2 threshold) and bumps their `conflictCount`. Wired into the Save/forward flow in `index.ts`; Premium-gated via `canThesis`. Detection is rule-based (no AI call on the save hot path).
+- **ResearchService** *(new)*: PostgreSQL persistence (`research_items` table, Drizzle ORM). Manages research items with auto-tagging (tickers via regex), category classification (keyword-based), sentiment scoring (rule-based), search (by keyword/ticker/category), star/bookmark, digest data aggregation, and weekly-report data (`getWeeklyReportData` — this-week vs last-week activity + per-ticker sentiment shift).
+- **PlanService** *(new)*: PostgreSQL persistence (`plans` table, Drizzle ORM). Manages subscription tiers (free/pro/premium), daily forward rate limiting, feature gating, and plan expiration. Accepts an admin-ID list (from `config.adminUserIds` / `ADMIN_USER_IDS`); admins are always treated as Premium (`isAdmin()`, `effectiveTier()` → all feature gates pass, unlimited forwards, always digest-eligible).
+- **UserService**: PostgreSQL persistence (`users` table, Drizzle ORM). Supports multi-doc aliases (e.g., `work` → `<docId>`). Auto-sets first added doc as active.
+- **TodoService**: PostgreSQL persistence (`todos` table, Drizzle ORM). Supports completion by index (1-based) or keyword search.
+- **TradeService** *(new)*: PostgreSQL persistence (`trades` table, Drizzle ORM). Manages the Trade Journal — open/close trades, auto-computes PnL% (price- or percent-based, direction-aware), and aggregates stats (win rate, total PnL, avg planned RR, best/worst). Pro-gated via `canTrade`. Also supports **research-to-trade link** (`linkResearch`/`getTradeById`, `linkedResearch: string[]` on each trade) — Premium-gated via `canLinkResearch`. On `Close:`, Premium users get an inline keyboard of recent research matching the ticker (callback `linkres:<tradeId>:<researchId>`); the `Trades` list shows a 🔗N tag for trades with links. Also provides **advanced analytics** (`getAnalytics` → breakdown by ticker/direction/month + avg hold duration over closed trades) — Premium-gated via `canAnalytics`, surfaced by the `Trade Analytics` command with an AI insight from `AIService.generateTradeInsight`.
+- **ThesisService** *(new)*: PostgreSQL persistence (`theses` table, Drizzle ORM). Records per-user theses (`ticker`, `stance` bullish/bearish, `text`) and detects contradictions: `findConflicts(userId, ticker, sentiment)` returns active theses whose stance is clearly opposed to a newly-saved research item's sentiment (±0.2 threshold) and bumps their `conflictCount`. Wired into the Save/forward flow in `index.ts`; Premium-gated via `canThesis`. Detection is rule-based (no AI call on the save hot path).
 - **ReportService** *(new)*: Generates a trade performance **PDF** with `pdfkit` (in-memory `Buffer`, sent via grammY `InputFile`). Renders a header banner, summary, a drawn monthly-PnL bar chart, by-ticker/by-direction tables, and a closed-trade log with multi-page support (`bufferPages: true` for the footer pass). PDF text is **ASCII/English** — pdfkit's built-in fonts can't render Vietnamese diacritics, so `index.ts` runs the trader name through a `toAscii()` helper. Premium-gated via `canExport`.
 
 ### Subscription Tiers
@@ -207,9 +216,9 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 
 ### Data Persistence
 
-All data is stored as JSON files in `data/`. Read on service init, written synchronously on every mutation. **No database.**
+All data is stored in **PostgreSQL** (Supabase managed Postgres) via **Drizzle ORM**. Schema is defined in `src/db/schema.ts`; the shared connection pool is exported from `src/db/index.ts`. All service methods are async DB queries — no JSON file writes at runtime.
 
-> ⚠️ This means concurrent writes from multiple bot instances could corrupt data. Run only one instance.
+> Setup: create a Supabase project, add `DATABASE_URL` to `.env`, run `npm run db:push` to create tables, then (optionally) `npm run db:seed` to migrate any legacy `data/*.json` backups.
 
 ## Important Conventions
 

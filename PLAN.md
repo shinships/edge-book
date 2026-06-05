@@ -38,7 +38,7 @@
 **Đang chờ / TODO vận hành:**
 - `DATABASE_URL` — tạo project Supabase, lấy connection string (pooler), thêm vào `.env`, chạy `npm run db:push` để tạo schema, `npm run db:seed` để migrate data JSON cũ (nếu có).
 - `service_account.json` (Google APIs — Save Docs/Calendar/upload ảnh). **Gitignored** → phải copy thủ công, KHÔNG commit.
-- `.env` cũng gitignored. ✅ Đã có `.env.example` với đủ 15 biến; chỉ cần `cp .env.example .env` rồi điền.
+- `.env` cũng gitignored. ✅ Đã có `.env.example` với đủ 16 biến (bao gồm `DATABASE_URL`); chỉ cần `cp .env.example .env` rồi điền.
 - LemonSqueezy keys (bật `/upgrade`). Khi chưa có → test Premium bằng `ADMIN_USER_IDS` trong `.env`.
 - ✅ Multi-instance: sau khi chuyển sang PostgreSQL, giới hạn "chỉ 1 instance" đã được gỡ (không còn JSON race condition).
 
@@ -237,7 +237,7 @@ graph TD
 
 ## 5. Technical Architecture Evolution
 
-### Kiến trúc hiện tại của Sprint 1 (JSON persistence)
+### Kiến trúc Sprint 1 (JSON persistence — đã migrate sang PostgreSQL ở Sprint 7)
 
 ```mermaid
 graph TB
@@ -336,7 +336,7 @@ CREATE TABLE trades (
 
 ---
 
-## 7. Kế hoạch Migration JSON → DB *(🔴 ưu tiên hạ tầng kế tiếp)*
+## 7. Kế hoạch Migration JSON → DB *(✅ Hoàn tất — Sprint 7)*
 
 > **Mục tiêu:** gỡ giới hạn "chỉ 1 instance", có persistence bền/transaction, nền tảng cho Phase 4 (Team & API) + web dashboard. Giữ nguyên hành vi bot — đây là refactor hạ tầng, không phải đổi feature.
 
