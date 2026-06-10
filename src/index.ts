@@ -334,6 +334,26 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
+    if (text.toLowerCase() === 'digest off') {
+        if (!await planService.canUse(userId, 'canDigest')) {
+            await ctx.reply('🔒 Daily Digest là tính năng Pro. Gõ /plan để xem chi tiết.');
+            return;
+        }
+        await planService.setDigestEnabled(userId, false);
+        await ctx.reply('🔕 Đã tắt Daily Digest.\nBot sẽ không tự gửi digest lúc 8:00 sáng nữa.\n\nGõ Digest On để bật lại.');
+        return;
+    }
+
+    if (text.toLowerCase() === 'digest on') {
+        if (!await planService.canUse(userId, 'canDigest')) {
+            await ctx.reply('🔒 Daily Digest là tính năng Pro. Gõ /plan để xem chi tiết.');
+            return;
+        }
+        await planService.setDigestEnabled(userId, true);
+        await ctx.reply('🔔 Đã bật Daily Digest.\nBot sẽ tự gửi digest lúc 8:00 sáng mỗi ngày.');
+        return;
+    }
+
     if (text.toLowerCase() === 'digest' || text.toLowerCase() === 'daily digest') {
         if (!await planService.canUse(userId, 'canDigest')) {
             await ctx.reply('🔒 Daily Digest là tính năng Pro. Nâng cấp để sử dụng!\n\nGõ /plan để xem chi tiết.');
@@ -1180,6 +1200,12 @@ const BOT_COMMANDS = [
     { command: 'plan', description: '💳 Xem gói hiện tại & giới hạn' },
     { command: 'upgrade', description: '⭐ Nâng cấp Pro / Premium' },
 ];
+
+// Global error handler — prevents bot from crashing on unhandled errors (e.g. DB failures)
+bot.catch((err) => {
+    const ctx = err.ctx;
+    console.error(`Error handling update ${ctx.update.update_id}:`, err.error);
+});
 
 // Start webhook server (runs alongside bot polling)
 startWebhookServer(paymentService, bot);

@@ -13,6 +13,7 @@ export interface UserPlan {
     dailyForwardCount: number;
     lastResetDate: string;
     lsOrderId?: string;
+    digestEnabled: boolean;
 }
 
 export interface PlanLimits {
@@ -81,6 +82,7 @@ function toPlan(row: PlanRow): UserPlan {
         dailyForwardCount: row.dailyForwardCount,
         lastResetDate: row.lastResetDate,
         lsOrderId: row.lsOrderId ?? undefined,
+        digestEnabled: row.digestEnabled,
     };
 }
 
@@ -162,6 +164,11 @@ export class PlanService {
             .where(eq(plans.userId, userId));
     }
 
+    async setDigestEnabled(userId: number, enabled: boolean): Promise<void> {
+        await this.getPlan(userId); // ensure row exists
+        await db.update(plans).set({ digestEnabled: enabled }).where(eq(plans.userId, userId));
+    }
+
     async upgradePlan(userId: number, tier: PlanTier, durationDays?: number, orderId?: string): Promise<void> {
         await this.getPlan(userId); // ensure exists
 
@@ -208,7 +215,11 @@ export class PlanService {
         }
 
         info += `🔍 Search: ${limits.canSearch ? '✅' : '🔒 Pro'}\n`;
-        info += `📊 Daily Digest: ${limits.canDigest ? '✅' : '🔒 Pro'}\n`;
+        if (limits.canDigest) {
+            info += `📊 Daily Digest: ${plan.digestEnabled ? '✅ Bật' : '🔕 Tắt'} (Digest On/Off để đổi)\n`;
+        } else {
+            info += `📊 Daily Digest: 🔒 Pro\n`;
+        }
         info += `📈 Sentiment: ${limits.canSentiment ? '✅' : '🔒 Premium'}\n`;
         info += `📄 Export: ${limits.canExport ? '✅' : '🔒 Premium'}`;
 
@@ -229,15 +240,19 @@ export class PlanService {
     }
 
     async getDigestEligibleUsers(): Promise<number[]> {
-        const rows = await db.select({ userId: plans.userId, tier: plans.tier }).from(plans);
+        const rows = await db.select({ userId: plans.userId, tier: plans.tier, digestEnabled: plans.digestEnabled }).from(plans);
         const eligible = new Set<number>();
         for (const row of rows) {
-            if (PLAN_LIMITS[row.tier as PlanTier]?.canDigest) {
+            if (row.digestEnabled && PLAN_LIMITS[row.tier as PlanTier]?.canDigest) {
                 eligible.add(row.userId);
             }
         }
         for (const adminId of this.adminIds) {
-            eligible.add(adminId);
+            // Admins still respect their own digestEnabled setting
+            const adminRow = rows.find(r => r.userId === adminId);
+            if (!adminRow || adminRow.digestEnabled) {
+                eligible.add(adminId);
+            }
         }
         return Array.from(eligible);
     }
