@@ -2,7 +2,7 @@
 
 > **Brand: EdgeBook** — *"capture your edge."* Trading research OS sống trong Telegram.
 
-## 0. Trạng thái hiện tại *(cập nhật 2026-06-03)*
+## 0. Trạng thái hiện tại *(cập nhật 2026-06-10)*
 
 | Hạng mục | Trạng thái |
 |---|---|
@@ -22,21 +22,23 @@
 | **UX text** | ✅ 2026-06-01 — Việt hoá + làm gọn `/start` (kèm highlight tính năng) & `/help`; dọn định dạng reply (bỏ `—` và ngoặc kép quanh token lệnh, giữ ngoặc quanh giá trị user) |
 | **Gỡ Shopee** | ✅ 2026-06-01 — xoá hẳn Shopee tracker (service + handlers + menu + docs) do dự án tập trung vào trading research/OS |
 | **Sprint 7 — Migrate JSON → DB** | ✅ 2026-06-03 — Drizzle ORM + PostgreSQL/Supabase: schema 6 bảng, rewrite 6 services sang async, seed script, drizzle.config.ts, npm scripts `db:push/generate/migrate/seed`. Gỡ giới hạn "chỉ 1 instance". |
+| **DB live (Supabase)** | ✅ 2026-06-10 — `DATABASE_URL` đã cấu hình, schema đã push, bot chạy live trên Supabase. ⚠️ Migration (`db:push`) phải dùng **session pooler port 5432** — transaction pooler 6543 (runtime) làm drizzle-kit treo ở "Pulling schema". |
+| **Digest On/Off toggle** | ✅ 2026-06-10 — lệnh `Digest On`/`Digest Off` (cột `plans.digest_enabled`, default true); cron digest/weekly tôn trọng setting, admin cũng theo setting riêng. |
 
-> **Tầng 2 (Research Hub / Phase 2) và Tầng 3 (Trade Journal / Phase 3) đều hoàn tất 100%.** Sprint 7 (DB Migration) hoàn tất — persistence đã chuyển sang PostgreSQL/Supabase. Việc còn lại: cấu hình `DATABASE_URL` + `db:push` trên máy thật, rồi mở Phase 4 (Team & API).
+> **Tầng 2 (Research Hub / Phase 2) và Tầng 3 (Trade Journal / Phase 3) đều hoàn tất 100%.** Sprint 7 (DB Migration) hoàn tất và **DB Supabase đã live** (2026-06-10). Sẵn sàng mở Phase 4 (Team & API).
 
 ### Roadmap còn lại
 | Hạng mục | Loại | Ưu tiên |
 |---|---|---|
 | ~~Migrate JSON → DB (PostgreSQL/Supabase)~~ | ~~Hạ tầng~~ | ✅ Done Sprint 7 |
-| Cấu hình DB thật: tạo Supabase project, `DATABASE_URL` → `npm run db:push` | Vận hành | 🔴 Cần làm trước khi chạy bot với DB |
+| ~~Cấu hình DB thật: Supabase project, `DATABASE_URL`, `db:push`~~ | ~~Vận hành~~ | ✅ Done 2026-06-10 — DB live |
 | Phase 4 — Team workspace, role-based, Webhook/API, Discord/X bridge | Feature lớn | 🟡 Sau khi DB đã live |
 | Tầng 3 vision — multi-source aggregation, portfolio/PnL linkage, web dashboard (Next.js) | Feature lớn | 🟢 Dài hạn |
 | Go-to-Market (§6 — seed groups, content, KOL) | Tăng trưởng | 🟡 Song song |
 | `service_account.json`, LemonSqueezy keys | Vận hành | 🔴 Blocker để chạy thật (`.env.example` ✅ đã có) |
 
 **Đang chờ / TODO vận hành:**
-- `DATABASE_URL` — tạo project Supabase, lấy connection string (pooler), thêm vào `.env`, chạy `npm run db:push` để tạo schema, `npm run db:seed` để migrate data JSON cũ (nếu có).
+- ✅ `DATABASE_URL` — DB Supabase đã live. Lưu ý khi đổi schema: `npm run db:push` phải tạm đổi `.env` sang session pooler port 5432 (drizzle-kit treo trên transaction pooler 6543), xong đổi lại.
 - `service_account.json` (Google APIs — Save Docs/Calendar/upload ảnh). **Gitignored** → phải copy thủ công, KHÔNG commit.
 - `.env` cũng gitignored. ✅ Đã có `.env.example` với đủ 15 biến; chỉ cần `cp .env.example .env` rồi điền.
 - LemonSqueezy keys (bật `/upgrade`). Khi chưa có → test Premium bằng `ADMIN_USER_IDS` trong `.env`.
