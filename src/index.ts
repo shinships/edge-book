@@ -119,6 +119,16 @@ function docSyncErrorReason(error: any, docId: string): string {
         const shareWith = sa ? `\n📧 Share doc cho email này (quyền Editor):\n${sa}` : '';
         return `\n⚠️ Bot chưa có quyền edit doc đang chọn.${shareWith}\n🔗 ${docUrl(docId)}`;
     }
+    // Inline image insert stores a copy in the doc OWNER's Drive. A 400/badRequest here
+    // almost always means the owner's Drive is full (text appends still work because they
+    // cost ~no storage). Guide the user to free space or own the doc with a non-full account.
+    if (error instanceof GoogleApiError && error.status === 400) {
+        return `\n⚠️ Không chèn được ảnh vào doc.` +
+            `\nNguyên nhân thường gặp: tài khoản Google sở hữu doc đã hết dung lượng Drive` +
+            ` (ảnh inline tốn dung lượng của chủ doc, còn text thì không).` +
+            `\n👉 Giải phóng dung lượng Drive, hoặc dùng doc thuộc tài khoản còn trống.` +
+            `\n🔗 ${docUrl(docId)}`;
+    }
     return `\n⚠️ Google Docs sync failed.`;
 }
 
