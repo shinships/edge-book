@@ -47,6 +47,16 @@ export class GoogleService {
         return this.saEmail || '';
     }
 
+    /** Best-effort: the email of the account that OWNS a doc (the one whose Drive storage inline images consume). Null on failure. */
+    async getDocOwnerEmail(docId: string): Promise<string | null> {
+        try {
+            const f = await this.drive.files.get({ fileId: docId, fields: 'owners(emailAddress)' });
+            return f.data.owners?.[0]?.emailAddress || null;
+        } catch {
+            return null;
+        }
+    }
+
     async createCalendarEvent(eventData: { title: string; startTime: string; endTime?: string; description?: string }) {
         try {
             const startStr = eventData.startTime;

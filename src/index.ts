@@ -113,7 +113,7 @@ function stripWrappers(s: string): string {
     return s.replace(/^[\[\(<"'`]+/, '').replace(/[\]\)>"'`]+$/, '').trim();
 }
 
-function docSyncErrorReason(error: any, docId: string): string {
+async function docSyncErrorReason(error: any, docId: string): Promise<string> {
     if (error instanceof GoogleApiError && error.status === 403) {
         const sa = googleService.getServiceAccountEmail();
         const shareWith = sa ? `\n📧 Share doc cho email này (quyền Editor):\n${sa}` : '';
@@ -121,12 +121,15 @@ function docSyncErrorReason(error: any, docId: string): string {
     }
     // Inline image insert stores a copy in the doc OWNER's Drive. A 400/badRequest here
     // almost always means the owner's Drive is full (text appends still work because they
-    // cost ~no storage). Guide the user to free space or own the doc with a non-full account.
+    // cost ~no storage). We can't read the owner's quota via the service account, so we
+    // surface the owner email and let the user free space / switch to a non-full account.
     if (error instanceof GoogleApiError && error.status === 400) {
+        const owner = await googleService.getDocOwnerEmail(docId);
+        const who = owner ? ` (${owner})` : '';
         return `\n⚠️ Không chèn được ảnh vào doc.` +
-            `\nNguyên nhân thường gặp: tài khoản Google sở hữu doc đã hết dung lượng Drive` +
+            `\nNguyên nhân thường gặp: tài khoản Google sở hữu doc${who} đã hết dung lượng Drive` +
             ` (ảnh inline tốn dung lượng của chủ doc, còn text thì không).` +
-            `\n👉 Giải phóng dung lượng Drive, hoặc dùng doc thuộc tài khoản còn trống.` +
+            `\n👉 Giải phóng dung lượng Drive của tài khoản đó, hoặc dùng doc thuộc tài khoản còn trống.` +
             `\n🔗 ${docUrl(docId)}`;
     }
     return `\n⚠️ Google Docs sync failed.`;
@@ -933,7 +936,7 @@ bot.on('message:text', async (ctx) => {
                     await ctx.reply(`✅ Saved ${source} to Google Docs${tagInfo}${catInfo}${sentimentInfo}`);
                 }
             } catch (error) {
-                await ctx.reply(`✅ Research saved locally${tagInfo}${catInfo}${sentimentInfo}${docSyncErrorReason(error, targetDocId)}`);
+                await ctx.reply(`✅ Research saved locally${tagInfo}${catInfo}${sentimentInfo}${await docSyncErrorReason(error, targetDocId)}`);
             }
         } else {
             await ctx.reply(`✅ Research saved!${tagInfo}${catInfo}${sentimentInfo}\n💡 Tip: Add Doc [name] [ID] để sync với Google Docs.`);
@@ -1020,7 +1023,7 @@ bot.on('message:photo', async (ctx) => {
             } catch (docError) {
                 console.error('Docs Insert Error:', docError);
                 const targetDocId = await userService.getActiveDocId(userId) || config.googleDocId;
-                await ctx.reply(`⚠️ Lưu ảnh vào Docs thất bại.${docSyncErrorReason(docError, targetDocId)}`);
+                await ctx.reply(`⚠️ Lưu ảnh vào Docs thất bại.${await docSyncErrorReason(docError, targetDocId)}`);
             }
         }
     } catch (error) {
