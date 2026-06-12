@@ -28,6 +28,8 @@ export interface PlanLimits {
     canAnalytics: boolean;
     canThesis: boolean;
     maxDocs: number;
+    maxWatchlist: number;     // -1 = unlimited
+    maxActiveAlerts: number;  // 0 = feature locked, -1 = unlimited
 }
 
 const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
@@ -43,6 +45,8 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canAnalytics: false,
         canThesis: false,
         maxDocs: 1,
+        maxWatchlist: 3,
+        maxActiveAlerts: 0,
     },
     pro: {
         maxForwardsPerDay: -1,
@@ -56,6 +60,8 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canAnalytics: false,
         canThesis: false,
         maxDocs: 5,
+        maxWatchlist: -1,
+        maxActiveAlerts: 10,
     },
     premium: {
         maxForwardsPerDay: -1,
@@ -69,6 +75,8 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canAnalytics: true,
         canThesis: true,
         maxDocs: -1,
+        maxWatchlist: -1,
+        maxActiveAlerts: -1,
     },
 };
 
@@ -136,7 +144,7 @@ export class PlanService {
         return PLAN_LIMITS[this.effectiveTier(plan, userId)];
     }
 
-    async canUse(userId: number, feature: keyof Omit<PlanLimits, 'maxForwardsPerDay' | 'maxDocs'>): Promise<boolean> {
+    async canUse(userId: number, feature: keyof Omit<PlanLimits, 'maxForwardsPerDay' | 'maxDocs' | 'maxWatchlist' | 'maxActiveAlerts'>): Promise<boolean> {
         const limits = await this.getLimits(userId);
         return limits[feature] as boolean;
     }
@@ -221,6 +229,10 @@ export class PlanService {
             info += `📊 Daily Digest: 🔒 Pro\n`;
         }
         info += `📈 Sentiment: ${limits.canSentiment ? '✅' : '🔒 Premium'}\n`;
+        const alertLimit = limits.maxActiveAlerts === 0
+            ? '🔒 Pro'
+            : limits.maxActiveAlerts === -1 ? 'Unlimited' : `tối đa ${limits.maxActiveAlerts}`;
+        info += `🔔 Price Alerts: ${alertLimit}\n`;
         info += `📄 Export: ${limits.canExport ? '✅' : '🔒 Premium'}`;
 
         if (admin) {

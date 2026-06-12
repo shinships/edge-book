@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, integer, real, bigint, jsonb, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, text, boolean, integer, real, bigint, jsonb, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 export const users = pgTable('users', {
     id: bigint('id', { mode: 'number' }).primaryKey(),
@@ -47,6 +47,11 @@ export const trades = pgTable('trades', {
     status: text('status').notNull(),
     notes: text('notes'),
     linkedResearch: text('linked_research').array().notNull(),
+    positionSize: real('position_size'),
+    riskPercent: real('risk_percent'),
+    feePercent: real('fee_percent'),
+    closeReason: text('close_reason'),   // 'tp' | 'sl' | 'manual'
+    setupTag: text('setup_tag'),
     openedAt: timestamp('opened_at', { withTimezone: true }).notNull(),
     closedAt: timestamp('closed_at', { withTimezone: true }),
 });
@@ -62,6 +67,24 @@ export const theses = pgTable('theses', {
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
     closedAt: timestamp('closed_at', { withTimezone: true }),
 });
+
+export const alerts = pgTable('alerts', {
+    id: text('id').primaryKey(),
+    userId: bigint('user_id', { mode: 'number' }).notNull(),
+    ticker: text('ticker').notNull(),
+    condition: text('condition').notNull(),           // 'above' | 'below'
+    targetPrice: real('target_price').notNull(),
+    status: text('status').notNull(),                 // 'active' | 'triggered'
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    triggeredAt: timestamp('triggered_at', { withTimezone: true }),
+});
+
+export const watchlistItems = pgTable('watchlist_items', {
+    id: text('id').primaryKey(),
+    userId: bigint('user_id', { mode: 'number' }).notNull(),
+    ticker: text('ticker').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+}, (t) => [uniqueIndex('watchlist_user_ticker_idx').on(t.userId, t.ticker)]);
 
 export const todos = pgTable('todos', {
     id: bigint('id', { mode: 'number' }).primaryKey(),

@@ -9,7 +9,7 @@ export interface TradeReportData {
     generatedAt: Date;
     stats: TradeStats;
     analytics: TradeAnalytics;
-    closedTrades: TradeItem[];  // closed trades, newest-first preferred
+    closedTrades: (TradeItem & { rMultiple?: number | null })[];  // closed trades, newest-first preferred; rMultiple precomputed by caller
 }
 
 // --- Layout constants ---
@@ -67,6 +67,10 @@ export class ReportService {
             ['Total PnL', this.fmtPct(s.totalPnl)],
             ['Avg planned RR', `${s.avgRR}`],
         ];
+        if (s.rTradeCount > 0) {
+            summaryRows.push(['Total R', `${s.totalR > 0 ? '+' : ''}${s.totalR}R  (${s.rTradeCount} trades with SL)`]);
+            summaryRows.push(['Expectancy (avg R)', `${s.avgR}R / trade`]);
+        }
         if (data.analytics.avgHoldHours !== null) {
             summaryRows.push(['Avg hold time', this.fmtHold(data.analytics.avgHoldHours)]);
         }
@@ -127,18 +131,19 @@ export class ReportService {
             y = this.sectionTitle(doc, `Closed Trades (${data.closedTrades.length})`, left, y);
             y = this.table(
                 doc,
-                ['Date', 'Dir', 'Ticker', 'Entry', 'Exit', 'PnL'],
+                ['Date', 'Dir', 'Ticker', 'Entry', 'Exit', 'R', 'PnL'],
                 data.closedTrades.map((t) => [
                     this.fmtShortDate(t.closedAt ?? t.openedAt),
                     t.direction.toUpperCase(),
                     t.ticker,
                     this.fmtNum(t.entryPrice),
                     t.exitPrice !== undefined ? this.fmtNum(t.exitPrice) : '-',
+                    t.rMultiple != null ? `${t.rMultiple}R` : '-',
                     this.fmtPct(t.pnlPercent ?? 0),
                 ]),
                 left, y, contentWidth,
-                [0.18, 0.12, 0.2, 0.17, 0.17, 0.16],
-                (row) => this.pnlColor(parseFloat(row[5])),
+                [0.16, 0.10, 0.18, 0.15, 0.15, 0.13, 0.13],
+                (row) => this.pnlColor(parseFloat(row[6])),
             );
         }
 

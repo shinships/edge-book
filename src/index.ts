@@ -10,6 +10,9 @@ import { PaymentService } from './services/payment.service';
 import { TradeService } from './services/trade.service';
 import { ReportService } from './services/report.service';
 import { ThesisService, ThesisItem } from './services/thesis.service';
+import { MarketService } from './services/market.service';
+import { AlertService } from './services/alert.service';
+import { WatchlistService } from './services/watchlist.service';
 import { startWebhookServer } from './webhook.server';
 import cron from 'node-cron';
 
@@ -24,6 +27,9 @@ const paymentService = new PaymentService(planService);
 const tradeService = new TradeService();
 const reportService = new ReportService();
 const thesisService = new ThesisService();
+const marketService = new MarketService();
+const alertService = new AlertService();
+const watchlistService = new WatchlistService();
 
 // Parse a positive price string that may use a "k" suffix (e.g. "108k" -> 108000).
 // Returns undefined for malformed input (e.g. "1.2.3", ".", "0", negatives).
@@ -45,6 +51,16 @@ function parsePercent(raw?: string): number | undefined {
     return Number.isFinite(v) ? v : undefined;
 }
 
+// Parse a bare positive percent like "1", "1%", "0.5" (no sign, no "k").
+// Used for the optional `risk`/`fee` values on Trade: open.
+function parseBarePercent(raw?: string): number | undefined {
+    if (!raw) return undefined;
+    const m = raw.trim().match(/^(\d+(?:\.\d+)?)%?$/);
+    if (!m) return undefined;
+    const v = parseFloat(m[1]);
+    return Number.isFinite(v) && v > 0 ? v : undefined;
+}
+
 // Validate a ticker: alphanumerics with one optional . / - separator (e.g. BTC,
 // BRK.B, ETH/USDT, BTC-PERP). Must contain at least one letter (rejects "123").
 function isValidTicker(raw: string): boolean {
@@ -63,6 +79,28 @@ function formatPrice(value: number): string {
         return `${Number.isInteger(k) ? k : k.toFixed(2).replace(/\.?0+$/, '')}k`;
     }
     return `${value}`;
+}
+
+// Best-effort live-price block for digests. Returns '' on any failure so the
+// digest always sends, with or without prices.
+async function buildPriceBlock(tickers: string[]): Promise<string> {
+    try {
+        const top = tickers.slice(0, 5);
+        if (top.length === 0) return '';
+        const stats = await marketService.get24hStats(top);
+        const lines = top
+            .map((t) => {
+                const s = stats.get(t);
+                if (!s) return null;
+                const e = s.changePercent >= 0 ? '🟢' : '🔴';
+                return `${e} ${t}: ${formatPrice(s.price)} (${fmtPct(Math.round(s.changePercent * 10) / 10)})`;
+            })
+            .filter((l): l is string => l !== null);
+        return lines.length > 0 ? `\n\n💹 Giá hiện tại:\n${lines.join('\n')}` : '';
+    } catch (e) {
+        console.error('[Digest] price enrichment skipped:', e);
+        return '';
+    }
 }
 
 // Build a short, single-line preview label for a research item (for inline buttons).
@@ -189,9 +227,15 @@ bot.command('help', (ctx) => {
         '\n' +
         '📈 Trade Journal (Pro)\n' +
         '• Trade: Long BTC entry 108k SL 105k TP 115k → mở lệnh\n' +
-        '• Close: BTC 112k · Close: BTC +3.2% → đóng lệnh\n' +
+        '• Thêm tuỳ chọn: size 500 risk 1% fee 0.1% setup breakout\n' +
+        '• Close: BTC 112k · Close: BTC +3.2% · Close: BTC 105k sl\n' +
         '• Trades · Trade Stats\n' +
-        '• Trade Analytics · Export PDF (Premium)\n' +
+        '• Trade Analytics · Equity · Export PDF (Premium)\n' +
+        '\n' +
+        '💹 Market & Alerts\n' +
+        '• Watch: BTC · Unwatch: BTC · Watchlist → giá live + 24h\n' +
+        '• Alert: BTC > 70k · Alert: ETH < 2400 (Pro)\n' +
+        '• Alerts → xem & xoá alerts đang chạy\n' +
         '\n' +
         '💳 Tài khoản\n' +
         '• /plan · /upgrade'
@@ -376,7 +420,8 @@ bot.on('message:text', async (ctx) => {
         await ctx.replyWithChatAction('typing');
         const digestData = await researchService.getDigestData(userId, 24);
         const digest = await aiService.generateDigest(digestData);
-        await ctx.reply(digest);
+        const priceBlock = await buildPriceBlock(digestData.topTickers.map((t) => t.ticker));
+        await ctx.reply(digest + priceBlock);
         return;
     }
 
@@ -561,19 +606,47 @@ bot.on('message:text', async (ctx) => {
         }
         const ticker = rawTicker.toUpperCase();
         const rest = m[3];
-        const entry = parsePrice(rest.match(/entry\s*(\S+)/i)?.[1]);
-        const sl = parsePrice(rest.match(/sl\s*(\S+)/i)?.[1]);
-        const tp = parsePrice(rest.match(/tp\s*(\S+)/i)?.[1]);
+        // \b before each keyword so "setup" (contains "tp") is not swallowed by the tp matcher.
+        const entry = parsePrice(rest.match(/\bentry\s*(\S+)/i)?.[1]);
+        const sl = parsePrice(rest.match(/\bsl\s*(\S+)/i)?.[1]);
+        const tp = parsePrice(rest.match(/\btp\s*(\S+)/i)?.[1]);
         if (entry === undefined) {
             await ctx.reply('⚠️ Thiếu hoặc sai giá entry. ' + tradeUsage);
             return;
         }
+        // Optional risk-based fields. If a keyword is present but its value is
+        // malformed, warn and abort rather than silently dropping it.
+        const sizeRaw = rest.match(/\bsize\s+(\S+)/i)?.[1];
+        const riskRaw = rest.match(/\brisk\s+(\S+)/i)?.[1];
+        const feeRaw = rest.match(/\bfee\s+(\S+)/i)?.[1];
+        const setup = rest.match(/\bsetup\s+(\S+)/i)?.[1]?.toLowerCase();
+
+        const size = sizeRaw !== undefined ? parsePrice(sizeRaw) : undefined;
+        if (sizeRaw !== undefined && size === undefined) {
+            await ctx.reply('⚠️ Giá trị size không hợp lệ. Ví dụ: size 500 hoặc size 1.5k');
+            return;
+        }
+        const risk = riskRaw !== undefined ? parseBarePercent(riskRaw) : undefined;
+        if (riskRaw !== undefined && (risk === undefined || risk > 100)) {
+            await ctx.reply('⚠️ Giá trị risk không hợp lệ (0-100). Ví dụ: risk 1%');
+            return;
+        }
+        const fee = feeRaw !== undefined ? parseBarePercent(feeRaw) : undefined;
+        if (feeRaw !== undefined && (fee === undefined || fee >= 100)) {
+            await ctx.reply('⚠️ Giá trị fee không hợp lệ. Ví dụ: fee 0.1%');
+            return;
+        }
+
         const trade = await tradeService.openTrade(userId, {
             ticker,
             direction,
             entryPrice: entry,
             stopLoss: sl,
             takeProfit: tp,
+            positionSize: size,
+            riskPercent: risk,
+            feePercent: fee,
+            setupTag: setup,
         });
         if (!trade) {
             await ctx.reply('⚠️ Không thể mở lệnh: giá không hợp lệ.');
@@ -588,6 +661,10 @@ bot.on('message:text', async (ctx) => {
             `Entry: ${formatPrice(trade.entryPrice)}` +
             (trade.stopLoss !== undefined ? `\nSL: ${formatPrice(trade.stopLoss)}` : '') +
             (trade.takeProfit !== undefined ? `\nTP: ${formatPrice(trade.takeProfit)}` : '') +
+            (trade.positionSize !== undefined ? `\nSize: ${formatPrice(trade.positionSize)}` : '') +
+            (trade.riskPercent !== undefined ? `\nRisk: ${trade.riskPercent}%/tài khoản` : '') +
+            (trade.feePercent !== undefined ? `\nFee: ${trade.feePercent}%` : '') +
+            (trade.setupTag ? `\nSetup: #${trade.setupTag}` : '') +
             (reversed ? '\n⚠️ SL/TP ngược chiều với hướng lệnh, sẽ không tính RR.' : '')
         );
         return;
@@ -600,11 +677,12 @@ bot.on('message:text', async (ctx) => {
             return;
         }
         const closeUsage = '⚠️ Sai cú pháp. Ví dụ: Close: BTC 112k  hoặc  Close: BTC +3.2%';
-        const m = text.slice(text.indexOf(':') + 1).trim().match(/^(\S+)\s+(\S+)$/);
+        const m = text.slice(text.indexOf(':') + 1).trim().match(/^(\S+)\s+(\S+)(?:\s+(tp|sl|manual))?$/i);
         if (!m) {
             await ctx.reply(closeUsage);
             return;
         }
+        const explicitReason = m[3]?.toLowerCase() as 'tp' | 'sl' | 'manual' | undefined;
         const rawTicker = m[1];
         if (!isValidTicker(rawTicker)) {
             await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ.`);
@@ -628,17 +706,25 @@ bot.on('message:text', async (ctx) => {
             }
             exit = { price };
         }
-        const closed = await tradeService.closeTrade(userId, ticker, exit);
+        const closed = await tradeService.closeTrade(userId, ticker, exit, explicitReason);
         if (!closed) {
             await ctx.reply(`⚠️ Không tìm thấy lệnh open nào cho ${ticker}.`);
             return;
         }
         const pnl = closed.pnlPercent ?? 0;
         const emoji = pnl > 0 ? '✅' : '❌';
+        const r = tradeService.actualR(closed);
+        const fee = closed.feePercent;
+        const reasonLine = closed.closeReason === 'tp'
+            ? '\nLý do: chạm TP 🎯'
+            : closed.closeReason === 'sl' ? '\nLý do: chạm SL 🛑' : '\nLý do: đóng tay';
         await ctx.reply(
             `${emoji} Đã đóng ${closed.direction.toUpperCase()} ${closed.ticker}\n` +
             `Entry: ${formatPrice(closed.entryPrice)} → Exit: ${formatPrice(closed.exitPrice!)}\n` +
-            `PnL: ${fmtPct(pnl)}`
+            `PnL: ${fmtPct(pnl)}` +
+            (fee !== undefined ? ` (net ${fmtPct(Math.round((pnl - fee) * 100) / 100)} sau fee)` : '') +
+            (r !== null ? `\nR: ${r > 0 ? '+' : ''}${r}R` : '') +
+            reasonLine
         );
 
         // Research-to-trade link (Premium): offer to link recent research on this ticker.
@@ -695,7 +781,10 @@ bot.on('message:text', async (ctx) => {
             closed.forEach((t) => {
                 const pnl = t.pnlPercent ?? 0;
                 const e = pnl > 0 ? '✅' : '❌';
-                msg += `${e} ${t.direction.toUpperCase()} ${t.ticker}: ${fmtPct(pnl)}${linkTag(t)}\n`;
+                const r = tradeService.actualR(t);
+                msg += `${e} ${t.direction.toUpperCase()} ${t.ticker}: ${fmtPct(pnl)}` +
+                    (r !== null ? ` · ${r > 0 ? '+' : ''}${r}R` : '') +
+                    (t.setupTag ? ` · #${t.setupTag}` : '') + linkTag(t) + '\n';
             });
         }
         await ctx.reply(msg);
@@ -719,6 +808,10 @@ bot.on('message:text', async (ctx) => {
             `Win rate: ${s.winRate}% (${s.wins}W / ${s.losses}L)\n` +
             `Tổng PnL: ${fmtPct(s.totalPnl)}\n` +
             `Avg RR (planned): ${s.avgRR}`;
+        if (s.rTradeCount > 0) {
+            msg += `\nTổng R: ${s.totalR > 0 ? '+' : ''}${s.totalR}R (${s.rTradeCount} lệnh có SL)` +
+                `\nExpectancy: ${s.avgR}R/lệnh`;
+        }
         if (s.best) msg += `\nBest: ${s.best.ticker} ${fmtPct(s.best.pnlPercent ?? 0)}`;
         if (s.worst) msg += `\nWorst: ${s.worst.ticker} ${fmtPct(s.worst.pnlPercent ?? 0)}`;
         await ctx.reply(msg);
@@ -805,7 +898,10 @@ bot.on('message:text', async (ctx) => {
                 generatedAt: new Date(),
                 stats,
                 analytics,
-                closedTrades: [...closedTrades].reverse(),
+                closedTrades: [...closedTrades].reverse().map((t) => ({
+                    ...t,
+                    rMultiple: tradeService.actualR(t),
+                })),
             });
             const fileName = `edgebook-trade-report-${new Date().toISOString().slice(0, 10)}.pdf`;
             await ctx.replyWithDocument(new InputFile(pdf, fileName), {
@@ -815,6 +911,162 @@ bot.on('message:text', async (ctx) => {
             console.error('PDF export error:', error);
             await ctx.reply('⚠️ Lỗi khi tạo PDF. Vui lòng thử lại sau.');
         }
+        return;
+    }
+
+    // Equity / Equity Curve — cumulative R curve (Premium)
+    if (text.toLowerCase() === 'equity' || text.toLowerCase() === 'equity curve') {
+        if (!await planService.canUse(userId, 'canAnalytics')) {
+            await ctx.reply('🔒 Equity Curve là tính năng Premium. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const curve = await tradeService.getEquityCurve(userId);
+        if (curve.points.length === 0) {
+            await ctx.reply(
+                '📈 Chưa có lệnh đóng nào có SL để tính R.\n' +
+                'Mở lệnh kèm SL (Trade: Long BTC entry 108k SL 105k ...) rồi đóng để build equity curve.' +
+                (curve.skipped > 0 ? `\n(${curve.skipped} lệnh không có SL, bị bỏ qua)` : '')
+            );
+            return;
+        }
+        const BLOCKS = '▁▂▃▄▅▆▇█';
+        const pts = curve.points.slice(-30);
+        const cums = pts.map((p) => p.cumR);
+        const lo = Math.min(...cums);
+        const hi = Math.max(...cums);
+        const range = hi - lo;
+        const spark = cums.map((v) => {
+            const idx = range === 0 ? 4 : Math.round(((v - lo) / range) * 7);
+            return BLOCKS[Math.max(0, Math.min(7, idx))];
+        }).join('');
+        const last = pts[pts.length - 1];
+        await ctx.reply(
+            '📈 Equity Curve (R tích lũy)\n\n' +
+            `${spark}\n\n` +
+            `Tổng R: ${curve.totalR > 0 ? '+' : ''}${curve.totalR}R (${curve.points.length} lệnh có SL)\n` +
+            `Đỉnh: ${curve.maxCumR > 0 ? '+' : ''}${curve.maxCumR}R · Đáy: ${curve.minCumR > 0 ? '+' : ''}${curve.minCumR}R\n` +
+            `Hiện tại: ${last.cumR > 0 ? '+' : ''}${last.cumR}R` +
+            (curve.skipped > 0 ? `\n(${curve.skipped} lệnh không có SL, không tính R)` : '')
+        );
+        return;
+    }
+
+    // Alert: BTC > 70k  |  Alert: ETH < 2400  (Pro)
+    const alertMatch = text.match(/^alert:\s*(\S+)\s*([<>])\s*(\S+)\s*$/i);
+    if (alertMatch) {
+        const limits = await planService.getLimits(userId);
+        if (limits.maxActiveAlerts === 0) {
+            await ctx.reply('🔒 Price Alerts là tính năng Pro. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const rawTicker = alertMatch[1];
+        if (!isValidTicker(rawTicker)) {
+            await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: BTC, ETH, SOL`);
+            return;
+        }
+        const ticker = rawTicker.toUpperCase();
+        const target = parsePrice(alertMatch[3]);
+        if (target === undefined) {
+            await ctx.reply('⚠️ Giá target không hợp lệ. Ví dụ: Alert: BTC > 70k');
+            return;
+        }
+        if (limits.maxActiveAlerts !== -1 && await alertService.countActive(userId) >= limits.maxActiveAlerts) {
+            await ctx.reply(`⚠️ Đã đạt giới hạn ${limits.maxActiveAlerts} alerts. Xoá bớt (gõ Alerts) hoặc /upgrade lên Premium.`);
+            return;
+        }
+        const condition = alertMatch[2] === '>' ? 'above' : 'below';
+        const alert = await alertService.addAlert(userId, ticker, condition, target);
+        if (!alert) {
+            await ctx.reply('⚠️ Không thể tạo alert. Vui lòng thử lại.');
+            return;
+        }
+        // Best-effort: echo current price and warn if condition is already met.
+        let extra = '';
+        try {
+            const prices = await marketService.getPrices([ticker]);
+            const cur = prices.get(ticker);
+            if (cur !== undefined) {
+                const alreadyHit = condition === 'above' ? cur >= target : cur <= target;
+                extra = `\nGiá hiện tại: ${formatPrice(cur)}` +
+                    (alreadyHit ? '\n⚠️ Điều kiện đã thoả ngay bây giờ, alert sẽ kích hoạt ở lần check tới.' : '');
+            }
+        } catch { /* ignore */ }
+        await ctx.reply(
+            `🔔 Đã đặt alert ${ticker} ${condition === 'above' ? '>' : '<'} ${formatPrice(target)}.\n` +
+            `Bot check giá mỗi phút và báo khi chạm.${extra}`
+        );
+        return;
+    }
+
+    // Alerts / My Alerts — list active alerts with delete buttons
+    if (text.toLowerCase() === 'alerts' || text.toLowerCase() === 'my alerts') {
+        const limits = await planService.getLimits(userId);
+        if (limits.maxActiveAlerts === 0) {
+            await ctx.reply('🔒 Price Alerts là tính năng Pro. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const active = await alertService.getActiveAlerts(userId);
+        if (active.length === 0) {
+            await ctx.reply('🔕 Chưa có alert nào đang chạy. Đặt alert: Alert: BTC > 70k');
+            return;
+        }
+        const keyboard = new InlineKeyboard();
+        active.forEach((a) => {
+            keyboard.text(
+                `🗑 ${a.ticker} ${a.condition === 'above' ? '>' : '<'} ${formatPrice(a.targetPrice)}`,
+                `alertdel:${a.id}`
+            ).row();
+        });
+        await ctx.reply(`🔔 Alerts đang chạy (${active.length}). Bấm để xoá:`, { reply_markup: keyboard });
+        return;
+    }
+
+    // Watch: BTC — add ticker to watchlist
+    const watchMatch = text.match(/^watch:\s*(\S+)\s*$/i);
+    if (watchMatch) {
+        const rawTicker = watchMatch[1];
+        if (!isValidTicker(rawTicker)) {
+            await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: BTC, ETH, SOL`);
+            return;
+        }
+        const ticker = rawTicker.toUpperCase();
+        const limits = await planService.getLimits(userId);
+        if (limits.maxWatchlist !== -1 && await watchlistService.count(userId) >= limits.maxWatchlist) {
+            await ctx.reply(`⚠️ Watchlist free tối đa ${limits.maxWatchlist} ticker. Gõ /upgrade lên Pro để theo dõi không giới hạn.`);
+            return;
+        }
+        const res = await watchlistService.add(userId, ticker);
+        await ctx.reply(res === 'added'
+            ? `👁 Đã thêm ${ticker} vào watchlist. Gõ Watchlist để xem giá.`
+            : `ℹ️ ${ticker} đã có trong watchlist rồi.`);
+        return;
+    }
+
+    // Unwatch: BTC — remove ticker from watchlist
+    const unwatchMatch = text.match(/^unwatch:\s*(\S+)\s*$/i);
+    if (unwatchMatch) {
+        const ticker = unwatchMatch[1].toUpperCase();
+        const ok = await watchlistService.remove(userId, ticker);
+        await ctx.reply(ok ? `🗑 Đã xoá ${ticker} khỏi watchlist.` : `⚠️ ${ticker} không có trong watchlist.`);
+        return;
+    }
+
+    // Watchlist — live price + 24h change for each ticker
+    if (text.toLowerCase() === 'watchlist') {
+        const tickers = await watchlistService.getWatchlist(userId);
+        if (tickers.length === 0) {
+            await ctx.reply('💹 Watchlist trống. Thêm ticker: Watch: BTC');
+            return;
+        }
+        await ctx.replyWithChatAction('typing');
+        const stats = await marketService.get24hStats(tickers);
+        const lines = tickers.map((t) => {
+            const s = stats.get(t);
+            if (!s) return `⚪ ${t}: n/a (không có trên Binance)`;
+            const e = s.changePercent >= 0 ? '🟢' : '🔴';
+            return `${e} ${t}: ${formatPrice(s.price)} (${fmtPct(Math.round(s.changePercent * 10) / 10)})`;
+        });
+        await ctx.reply(`💹 Watchlist\n${lines.join('\n')}`);
         return;
     }
 
@@ -1048,7 +1300,8 @@ cron.schedule('0 8 * * *', async () => {
             if (digestData.totalItems === 0) continue;
 
             const digest = await aiService.generateDigest(digestData);
-            await bot.api.sendMessage(userId, `📬 Daily Research Digest\n\n${digest}`);
+            const priceBlock = await buildPriceBlock(digestData.topTickers.map((t) => t.ticker));
+            await bot.api.sendMessage(userId, `📬 Daily Research Digest\n\n${digest}${priceBlock}`);
             console.log(`[Digest] Sent digest to user ${userId} (${digestData.totalItems} items)`);
         } catch (error) {
             console.error(`[Digest] Error sending digest to user ${userId}:`, error);
@@ -1086,6 +1339,46 @@ cron.schedule('0 18 * * 0', async () => {
     }
 
     console.log('[Weekly] Weekly report cron completed.');
+}, {
+    timezone: 'Asia/Ho_Chi_Minh',
+});
+
+// --- PRICE ALERT CHECKER CRON (every minute) ---
+let alertCronBusy = false;
+cron.schedule('* * * * *', async () => {
+    if (alertCronBusy) return; // skip if a previous run is still in flight
+    alertCronBusy = true;
+    try {
+        const active = await alertService.getAllActive();
+        if (active.length === 0) return;
+
+        const tickers = [...new Set(active.map((a) => a.ticker))];
+        const prices = await marketService.getPrices(tickers);
+
+        for (const a of active) {
+            const price = prices.get(a.ticker);
+            if (price === undefined) continue;
+            const hit = a.condition === 'above' ? price >= a.targetPrice : price <= a.targetPrice;
+            if (!hit) continue;
+
+            // Mark triggered BEFORE sending — a send failure must not re-fire forever.
+            await alertService.markTriggered(a.id);
+            try {
+                await bot.api.sendMessage(
+                    a.userId,
+                    `🔔 Price Alert: ${a.ticker} đã ${a.condition === 'above' ? 'vượt' : 'thủng'} ${formatPrice(a.targetPrice)}\n` +
+                    `Giá hiện tại: ${formatPrice(price)}`
+                );
+            } catch (e) {
+                console.error(`[Alerts] send failed for user ${a.userId}:`, e);
+            }
+            await new Promise((r) => setTimeout(r, 150)); // Telegram rate-limit cushion
+        }
+    } catch (e) {
+        console.error('[Alerts] cron error:', e);
+    } finally {
+        alertCronBusy = false;
+    }
 }, {
     timezone: 'Asia/Ho_Chi_Minh',
 });
@@ -1204,6 +1497,32 @@ bot.callbackQuery(/^linkres:([^:]+):([^:]+)$/, async (ctx) => {
 bot.callbackQuery(/^linkres_skip:.+$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.editMessageText('👍 Đã bỏ qua link research.');
+});
+
+// Delete-alert callbacks (from the Alerts list)
+bot.callbackQuery(/^alertdel:(.+)$/, async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) {
+        await ctx.answerCallbackQuery();
+        return;
+    }
+    const ok = await alertService.deleteAlert(userId, ctx.match![1]);
+    await ctx.answerCallbackQuery(ok ? { text: '✅ Đã xoá alert' } : { text: '⚠️ Alert không tồn tại', show_alert: true });
+    if (!ok) return;
+
+    const active = await alertService.getActiveAlerts(userId);
+    if (active.length === 0) {
+        await ctx.editMessageText('🔕 Không còn alert nào đang chạy.');
+        return;
+    }
+    const keyboard = new InlineKeyboard();
+    active.forEach((a) => {
+        keyboard.text(
+            `🗑 ${a.ticker} ${a.condition === 'above' ? '>' : '<'} ${formatPrice(a.targetPrice)}`,
+            `alertdel:${a.id}`
+        ).row();
+    });
+    await ctx.editMessageText(`🔔 Alerts đang chạy (${active.length}). Bấm để xoá:`, { reply_markup: keyboard });
 });
 
 // Slash commands shown in Telegram's command menu.

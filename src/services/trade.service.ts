@@ -17,6 +17,11 @@ export interface TradeItem {
     status: 'open' | 'closed';
     notes?: string;
     linkedResearch?: string[];
+    positionSize?: number;
+    riskPercent?: number;
+    feePercent?: number;
+    closeReason?: 'tp' | 'sl' | 'manual';
+    setupTag?: string;
     openedAt: string;
     closedAt?: string;
 }
@@ -30,6 +35,9 @@ export interface TradeStats {
     winRate: number;
     totalPnl: number;
     avgRR: number;
+    totalR: number;
+    avgR: number | null;
+    rTradeCount: number;
     best?: TradeItem;
     worst?: TradeItem;
 }
@@ -85,6 +93,11 @@ function toItem(row: TradeRow): TradeItem {
         status: row.status as 'open' | 'closed',
         notes: row.notes ?? undefined,
         linkedResearch: row.linkedResearch ?? [],
+        positionSize: row.positionSize ?? undefined,
+        riskPercent: row.riskPercent ?? undefined,
+        feePercent: row.feePercent ?? undefined,
+        closeReason: (row.closeReason as 'tp' | 'sl' | 'manual') ?? undefined,
+        setupTag: row.setupTag ?? undefined,
         openedAt: row.openedAt.toISOString(),
         closedAt: row.closedAt?.toISOString(),
     };
@@ -153,11 +166,20 @@ export class TradeService {
             stopLoss?: number;
             takeProfit?: number;
             notes?: string;
+            positionSize?: number;
+            riskPercent?: number;
+            feePercent?: number;
+            setupTag?: string;
         }
     ): Promise<TradeItem | null> {
         if (!Number.isFinite(data.entryPrice) || data.entryPrice <= 0) return null;
         if (data.stopLoss !== undefined && (!Number.isFinite(data.stopLoss) || data.stopLoss <= 0)) return null;
         if (data.takeProfit !== undefined && (!Number.isFinite(data.takeProfit) || data.takeProfit <= 0)) return null;
+        if (data.positionSize !== undefined && (!Number.isFinite(data.positionSize) || data.positionSize <= 0)) return null;
+        if (data.riskPercent !== undefined && (!Number.isFinite(data.riskPercent) || data.riskPercent <= 0 || data.riskPercent > 100)) return null;
+        if (data.feePercent !== undefined && (!Number.isFinite(data.feePercent) || data.feePercent < 0 || data.feePercent >= 100)) return null;
+
+        const setupTag = data.setupTag?.trim().toLowerCase().slice(0, 24) || undefined;
 
         const [row] = await db.insert(trades).values({
             id: this.generateId(),
@@ -170,6 +192,10 @@ export class TradeService {
             status: 'open',
             notes: data.notes,
             linkedResearch: [],
+            positionSize: data.positionSize,
+            riskPercent: data.riskPercent,
+            feePercent: data.feePercent,
+            setupTag,
             openedAt: new Date(),
         }).returning();
         return toItem(row!);
@@ -178,7 +204,8 @@ export class TradeService {
     async closeTrade(
         userId: number,
         ticker: string,
-        exit: { price?: number; percent?: number }
+        exit: { price?: number; percent?: number },
+        explicitReason?: 'tp' | 'sl' | 'manual'
     ): Promise<TradeItem | null> {
         const upper = ticker.toUpperCase();
         const [row] = await db.select()
@@ -213,11 +240,39 @@ export class TradeService {
 
         const pnlPercent = Math.round(pnl * 100) / 100;
 
+        // Infer close reason from exit vs SL/TP when not explicitly given.
+        let closeReason: 'tp' | 'sl' | 'manual' = explicitReason ?? 'manual';
+        if (!explicitReason) {
+            if (trade.direction === 'long') {
+                if (trade.takeProfit !== undefined && exitPrice >= trade.takeProfit) closeReason = 'tp';
+                else if (trade.stopLoss !== undefined && exitPrice <= trade.stopLoss) closeReason = 'sl';
+            } else {
+                if (trade.takeProfit !== undefined && exitPrice <= trade.takeProfit) closeReason = 'tp';
+                else if (trade.stopLoss !== undefined && exitPrice >= trade.stopLoss) closeReason = 'sl';
+            }
+        }
+
         const [updated] = await db.update(trades)
-            .set({ status: 'closed', exitPrice, pnlPercent, closedAt: new Date() })
+            .set({ status: 'closed', exitPrice, pnlPercent, closeReason, closedAt: new Date() })
             .where(eq(trades.id, trade.id))
             .returning();
         return toItem(updated!);
+    }
+
+    // Risk per trade as % of entry, derived from the stop distance. Null without SL.
+    riskPerTradePercent(t: TradeItem): number | null {
+        if (t.stopLoss === undefined) return null;
+        const risk = (Math.abs(t.entryPrice - t.stopLoss) / t.entryPrice) * 100;
+        return risk > 0 ? risk : null;
+    }
+
+    // Actual R-multiple of a closed trade: net PnL% (gross minus fee) / risk-per-trade%.
+    // Null when there is no SL or the trade is not closed yet.
+    actualR(t: TradeItem): number | null {
+        const risk = this.riskPerTradePercent(t);
+        if (risk === null || t.pnlPercent === undefined) return null;
+        const net = t.pnlPercent - (t.feePercent ?? 0);
+        return Math.round((net / risk) * 100) / 100;
     }
 
     private plannedRR(t: TradeItem): number | null {
@@ -252,6 +307,15 @@ export class TradeService {
                 ? Math.round((rrValues.reduce((a, b) => a + b, 0) / rrValues.length) * 100) / 100
                 : 0;
 
+        const rValues = closed
+            .map((t) => this.actualR(t))
+            .filter((v): v is number => v !== null);
+        const totalR = Math.round(rValues.reduce((a, b) => a + b, 0) * 100) / 100;
+        const avgR =
+            rValues.length > 0
+                ? Math.round((totalR / rValues.length) * 100) / 100
+                : null;
+
         let best: TradeItem | undefined;
         let worst: TradeItem | undefined;
         for (const t of closed) {
@@ -268,8 +332,46 @@ export class TradeService {
             winRate: closed.length > 0 ? Math.round((wins.length / closed.length) * 1000) / 10 : 0,
             totalPnl,
             avgRR,
+            totalR,
+            avgR,
+            rTradeCount: rValues.length,
             best,
             worst,
+        };
+    }
+
+    // Cumulative R curve over closed trades that have a stop (R-eligible), oldest first.
+    async getEquityCurve(userId: number): Promise<{
+        points: { closedAt: string; ticker: string; r: number; cumR: number }[];
+        totalR: number;
+        maxCumR: number;
+        minCumR: number;
+        skipped: number;
+    }> {
+        const closed = (await this.getClosedTrades(userId))
+            .filter((t) => t.closedAt)
+            .sort((a, b) => new Date(a.closedAt!).getTime() - new Date(b.closedAt!).getTime());
+
+        const points: { closedAt: string; ticker: string; r: number; cumR: number }[] = [];
+        let cumR = 0;
+        let skipped = 0;
+        for (const t of closed) {
+            const r = this.actualR(t);
+            if (r === null) {
+                skipped++;
+                continue;
+            }
+            cumR = Math.round((cumR + r) * 100) / 100;
+            points.push({ closedAt: t.closedAt!, ticker: t.ticker, r, cumR });
+        }
+
+        const cumValues = points.map((p) => p.cumR);
+        return {
+            points,
+            totalR: points.length > 0 ? cumValues[cumValues.length - 1] : 0,
+            maxCumR: cumValues.length > 0 ? Math.max(...cumValues) : 0,
+            minCumR: cumValues.length > 0 ? Math.min(...cumValues) : 0,
+            skipped,
         };
     }
 
