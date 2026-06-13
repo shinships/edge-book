@@ -1,6 +1,6 @@
 import { db } from '../db';
-import { users, researchItems, plans } from '../db/schema';
-import { inArray, ne } from 'drizzle-orm';
+import { users, researchItems, plans, referrals } from '../db/schema';
+import { inArray, ne, eq } from 'drizzle-orm';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -22,6 +22,8 @@ export interface GrowthStats {
     w2RetentionRate: number | null;
     payingTotal: number;
     payingBySource: GrowthSourceStats[];
+    referralCount: number;
+    kFactor: number | null;
 }
 
 export class GrowthService {
@@ -101,6 +103,12 @@ export class GrowthService {
             if (active) w2RetainedCount++;
         }
 
+        // --- Referral & K-factor (successful = referee reached activation) ---
+        const rewardedReferrals = await db.select({ id: referrals.id })
+            .from(referrals)
+            .where(eq(referrals.status, 'rewarded'));
+        const referralCount = rewardedReferrals.length;
+
         return {
             totalUsers: allUsers.length,
             newUsers7d: cohort7d.length,
@@ -113,6 +121,8 @@ export class GrowthService {
             w2RetentionRate: w2Cohort.length ? Math.round((w2RetainedCount / w2Cohort.length) * 100) : null,
             payingTotal: payingSet.size,
             payingBySource: bySource(allUsers),
+            referralCount,
+            kFactor: allUsers.length ? Math.round((referralCount / allUsers.length) * 100) / 100 : null,
         };
     }
 
@@ -153,7 +163,8 @@ export class GrowthService {
         }
 
         lines.push('');
-        lines.push('🔁 Referral & K-factor: chưa có dữ liệu (chờ /invite)');
+        lines.push(`🔁 Referral thành công: ${s.referralCount}` +
+            (s.kFactor !== null ? ` · K-factor: ${s.kFactor}` : ''));
 
         return lines.join('\n');
     }

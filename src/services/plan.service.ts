@@ -196,6 +196,21 @@ export class PlanService {
         await db.update(plans).set(set).where(eq(plans.userId, userId));
     }
 
+    // Grant bonus days on top of the user's current plan (referral rewards,
+    // milestones) without ever downgrading tier. Extends expiresAt from "now"
+    // or from the existing expiry, whichever is later.
+    async grantBonusDays(userId: number, days: number, minTier: PlanTier = 'pro'): Promise<void> {
+        const plan = await this.getPlan(userId);
+
+        const tierRank: Record<PlanTier, number> = { free: 0, pro: 1, premium: 2 };
+        const tier = tierRank[plan.tier] >= tierRank[minTier] ? plan.tier : minTier;
+
+        const base = plan.expiresAt && new Date(plan.expiresAt) > new Date() ? new Date(plan.expiresAt) : new Date();
+        const expiresAt = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+
+        await db.update(plans).set({ tier, expiresAt }).where(eq(plans.userId, userId));
+    }
+
     async checkExpiredPlans(): Promise<void> {
         await db.update(plans)
             .set({ tier: 'free', expiresAt: null })

@@ -102,6 +102,15 @@ export const disciplineState = pgTable('discipline_state', {
     cooldownUntil: timestamp('cooldown_until', { withTimezone: true }),
 });
 
+export const referrals = pgTable('referrals', {
+    id: text('id').primaryKey(),
+    referrerId: bigint('referrer_id', { mode: 'number' }).notNull(),
+    refereeId: bigint('referee_id', { mode: 'number' }).notNull().unique(),
+    status: text('status').notNull(),   // 'pending' | 'rewarded'
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    rewardedAt: timestamp('rewarded_at', { withTimezone: true }),
+});
+
 export const todos = pgTable('todos', {
     id: bigint('id', { mode: 'number' }).primaryKey(),
     userId: bigint('user_id', { mode: 'number' }).notNull(),

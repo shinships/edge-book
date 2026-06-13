@@ -49,6 +49,24 @@ export class UserService {
         return toProfile(row!);
     }
 
+    // Like getUser, but also reports whether this call inserted the row
+    // (brand-new user) — used by /start to scope referral recording to a
+    // user's very first /start.
+    async createIfNew(id: number, acquisitionSource?: string): Promise<{ user: UserProfile; isNew: boolean }> {
+        const inserted = await db.insert(users).values({
+            id,
+            notes: [],
+            docAliases: {},
+            acquisitionSource: acquisitionSource ?? null,
+            createdAt: new Date(),
+        }).onConflictDoNothing().returning();
+
+        if (inserted.length > 0) return { user: toProfile(inserted[0]), isNew: true };
+
+        const [row] = await db.select().from(users).where(eq(users.id, id));
+        return { user: toProfile(row!), isNew: false };
+    }
+
     async updateUser(id: number, updates: Partial<UserProfile>): Promise<UserProfile> {
         await this.getUser(id); // ensure exists
         const set: Partial<typeof users.$inferInsert> = {};
