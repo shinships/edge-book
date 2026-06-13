@@ -7,7 +7,7 @@
 
 ## Project Overview
 
-**EdgeBook** is a **Telegram Bot** that acts as a personal AI assistant and **Research OS for traders/investors**. Integrates **AI chat via Vertex-Key.com** (OpenAI-compatible API), **Google Docs** for saving notes/images, **Google Calendar** for scheduling, a local **To-Do list**, and a **smart research management system** with auto-tagging, search, digest, and subscription tiers. Built with **TypeScript**, uses the **grammY** framework for Telegram Bot API.
+**EdgeBook** is a **Telegram Bot** that acts as a personal AI assistant and **Research OS for traders/investors**. Integrates **AI chat via Vertex-Key.com** (OpenAI-compatible API), **Google Docs** for saving notes/images, **Google Calendar** for scheduling, a **To-Do list**, a **smart research management system** (auto-tagging, search, digest), a **Trade Journal** with PDF export, **price alerts & watchlist** (live Binance prices), and subscription tiers. Built with **TypeScript**, uses the **grammY** framework for Telegram Bot API; data lives in **PostgreSQL (Supabase)** via **Drizzle ORM**.
 
 ## Tech Stack
 
@@ -16,7 +16,9 @@
 | Runtime      | Node.js + TypeScript (ES2022, CommonJS)       |
 | Bot Framework| grammY v1.20                                  |
 | AI           | Vertex-Key.com (`openai` SDK) via OpenAI-compatible API — chat `AI_CHAT_MODEL` (default `aws/claude-sonnet-4-6-medium`), fast `AI_FAST_MODEL` (default `free/claude-haiku-4-5`) |
+| Database     | **PostgreSQL (Supabase)** via **Drizzle ORM** (`drizzle-orm` + `postgres` driver); schema in `src/db/schema.ts`, migrations via `drizzle-kit` |
 | Google APIs  | `googleapis` (Calendar v3, Drive v3, Docs v1) |
+| Market data  | Binance public REST API (no key) — live prices & 24h stats for Alerts/Watchlist (`market.service.ts`) |
 | PDF          | `pdfkit` — trade report export (ASCII/English text; built-in fonts can't render VN diacritics) |
 | Auth         | Google Service Account (`service_account.json`) |
 | Config       | `dotenv` (`.env` file)                        |
@@ -32,33 +34,39 @@ edge-book/
 ├── tsconfig.json
 ├── nodemon.json
 ├── PLAN.md                     # Product & monetization roadmap
+├── GTM.md                      # Growth marketing & viral playbook
+├── AGENTS.md                   # Codex (reviewer agent) instructions
+├── drizzle.config.ts           # drizzle-kit config (schema path, DATABASE_URL)
 ├── service-entry.js            # Stable launcher for the Windows Service (requires ./dist/index.js)
 ├── scripts/
 │   ├── service-install.js      # Install + start the "EdgeBookBot" Windows Service (elevated)
 │   └── service-uninstall.js    # Stop + remove the service (elevated)
 ├── daemon/                     # node-windows winsw exe/config/logs (gitignored, created on install)
-├── data/
-│   ├── users.json              # Persisted user profiles & doc aliases
-│   ├── todos.json              # Persisted to-do items (created at runtime)
-│   ├── research.json           # Research items with tags, sentiment (created at runtime)
-│   ├── plans.json              # User subscription plans (created at runtime)
-│   ├── trades.json             # Trade Journal entries per user (created at runtime)
-│   └── theses.json             # Thesis tracker entries per user (created at runtime)
+├── data/                       # LEGACY JSON files (users/todos/research/plans/trades/theses) —
+│                               # only used as seed source for `npm run db:seed`; runtime is on Postgres
 ├── src/
 │   ├── config.ts               # Loads env vars, validates required keys
 │   ├── index.ts                # Entry point — bot commands, message handlers, cron jobs
 │   ├── webhook.server.ts       # Express HTTP server for LemonSqueezy payment webhooks
+│   ├── db/
+│   │   ├── index.ts            # postgres client + drizzle instance (exits if DATABASE_URL missing)
+│   │   └── schema.ts           # Drizzle schema: users, plans, research_items, trades, theses, alerts, watchlist_items, todos
+│   ├── scripts/
+│   │   └── migrate-json-to-db.ts # One-time seed: legacy data/*.json → Postgres (`npm run db:seed`)
 │   ├── services/
 │   │   ├── ai.service.ts       # AI chat, calendar analysis, digest generation, research Q&A
+│   │   ├── alert.service.ts    # Price alerts CRUD (active/triggered) — checked by per-minute cron
 │   │   ├── google.service.ts   # Calendar, Drive, Docs API wrappers
+│   │   ├── market.service.ts   # Binance public API: batch prices + 24h stats, 45s cache, never throws
 │   │   ├── payment.service.ts  # LemonSqueezy checkout creation, HMAC verify, upgrade logic
 │   │   ├── plan.service.ts     # Subscription tier tracking & feature gating
 │   │   ├── report.service.ts   # PDF trade report generation via pdfkit (Premium export)
 │   │   ├── research.service.ts # Research items: auto-tagging, search, star, digest data
 │   │   ├── thesis.service.ts   # Thesis tracker: record theses + conflict detection vs research sentiment (Premium)
-│   │   ├── todo.service.ts     # File-based to-do CRUD per user
+│   │   ├── todo.service.ts     # To-do CRUD per user
 │   │   ├── trade.service.ts    # Trade Journal: open/close trades, PnL calc, stats, analytics (Pro/Premium)
-│   │   └── user.service.ts     # File-based user profile management & doc aliases
+│   │   ├── user.service.ts     # User profile management & doc aliases
+│   │   └── watchlist.service.ts # Watchlist CRUD (unique user+ticker)
 │   ├── test-ai.ts              # Manual test: verify Vertex-Key API connection
 │   ├── test-calendar.ts        # Manual test: create calendar event
 │   └── test-drive.ts           # Manual test: upload file to Drive
@@ -79,6 +87,12 @@ npm run build
 
 # Production
 npm start
+
+# Database (Drizzle ORM ↔ Supabase Postgres)
+npm run db:push      # push schema thẳng lên DB (dev) — ⚠️ dùng session pooler port 5432, xem chú ý dưới
+npm run db:generate  # generate SQL migration files
+npm run db:migrate   # apply migrations
+npm run db:seed      # one-time seed: legacy data/*.json → Postgres
 
 # Manual tests
 npx ts-node src/test-ai.ts
@@ -111,6 +125,7 @@ EdgeBook can run as a background Windows service (auto-start on boot, auto-resta
 | `VERTEX_KEY_BASE_URL`         | Optional | API base URL (default: `https://vertex-key.com/api/v1`) |
 | `AI_CHAT_MODEL`               | Optional | Chat model ID (default: `aws/claude-sonnet-4-6-medium`) |
 | `AI_FAST_MODEL`               | Optional | Fast model ID (default: `free/claude-haiku-4-5`) |
+| `DATABASE_URL`                | ✅       | Postgres connection string (Supabase) — app exits on startup if missing (`src/db/index.ts`) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | ✅    | Path to Service Account JSON file        |
 | `GOOGLE_DOC_ID`               | Optional | Default Google Doc ID for saving content |
 | `GOOGLE_DRIVE_FOLDER_ID`      | Optional | Drive folder for photo uploads           |
@@ -122,8 +137,10 @@ EdgeBook can run as a background Windows service (auto-start on boot, auto-resta
 | `WEBHOOK_PORT`                | Optional | Port for webhook Express server (default: `3000`) |
 | `ADMIN_USER_IDS`              | Optional | Comma-separated Telegram user IDs treated as admins (always Premium access) |
 
-Both `TELEGRAM_BOT_TOKEN` and `VERTEX_KEY_API_KEY` are validated on startup — app exits if missing.
+`TELEGRAM_BOT_TOKEN`, `VERTEX_KEY_API_KEY` (in `config.ts`) and `DATABASE_URL` (in `src/db/index.ts`) are validated on startup — app exits if missing.
 LemonSqueezy keys are optional; if absent, the `/upgrade` command shows a "not configured" message.
+
+> ⚠️ **Supabase pooler gotcha:** runtime dùng transaction pooler (port **6543**) là OK, nhưng `npm run db:push` với drizzle-kit sẽ **treo ở "Pulling schema"** trên pooler này. Khi đổi schema: tạm sửa `DATABASE_URL` trong `.env` sang **session pooler port 5432**, chạy `db:push`, rồi đổi lại.
 
 ## Architecture & Key Patterns
 
@@ -145,17 +162,22 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
    - `Thesis: <ticker> <bullish|bearish> <text>` — record a thesis (Premium); the bot alerts when newly-saved research contradicts it (rule-based sentiment vs stance, 0.2 threshold)
    - `Theses` / `My Theses` — list active theses (shows ⚠️N conflict count); `Close Thesis: <index|ticker>` — close one
    - `/plan` / `My Plan` — view current subscription plan and limits
-4. **Trade Journal commands** (new, Pro):
-   - `Trade: <Long|Short> <ticker> entry <price> SL <price> TP <price>` — open a trade (regex-parsed, `k` suffix supported)
-   - `Close: <ticker> <price>` or `Close: <ticker> +3.2%` — close most-recent open trade, auto-computes PnL%
-   - `Trades` / `My Trades` — list open + recent closed trades (shows 🔗N link tag)
+4. **Trade Journal commands** (Pro):
+   - `Trade: <Long|Short> <ticker> entry <price> SL <price> TP <price>` — open a trade (regex-parsed, `k` suffix supported). Optional extras (Trade Journal 2.0): `size 500 risk 1% fee 0.1% setup breakout` → `positionSize`, `riskPercent`, `feePercent`, `setupTag`
+   - `Close: <ticker> <price>` or `Close: <ticker> +3.2%` — close most-recent open trade, auto-computes PnL% (shows net-after-fee if `feePercent` set). Optional `sl`/`tp` suffix (e.g. `Close: BTC 105k sl`) records `closeReason` ('tp' | 'sl' | 'manual')
+   - `Trades` / `My Trades` — list open + recent closed trades (shows 🔗N link tag, #setupTag)
    - `Trade Stats` — win rate, total PnL, avg planned RR, best/worst
-   - `Trade Analytics` / `Performance` (Premium) — breakdown by ticker/direction/month + avg hold + AI insight
+   - `Trade Analytics` / `Performance` (Premium) — breakdown by ticker/direction/month + avg hold + R-multiple + AI insight
    - `Export` / `Export PDF` (Premium) — generates a PDF trade report (summary, monthly bar chart, ticker/direction breakdown, trade log) via `ReportService` and sends it as a Telegram document
-5. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
-6. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
-7. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc. For Premium users, also runs `ThesisService.findConflicts()` and sends a conflict alert if the new item contradicts an active thesis.
-8. **Default**: Falls through to AI chat with per-user session
+5. **Market & Alerts commands** (Sprint 8):
+   - `Watch: <ticker>` / `Unwatch: <ticker>` — add/remove ticker (free tối đa 3, Pro+ unlimited)
+   - `Watchlist` — live price + 24h change per ticker (Binance via `MarketService`)
+   - `Alert: <ticker> > <price>` / `Alert: <ticker> < <price>` — price alert (Pro: max 10 active, Premium: unlimited; `k` suffix supported)
+   - `Alerts` / `My Alerts` — list active alerts with inline delete buttons (callback `alertdel:<id>`)
+6. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
+7. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
+8. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc. For Premium users, also runs `ThesisService.findConflicts()` and sends a conflict alert if the new item contradicts an active thesis.
+9. **Default**: Falls through to AI chat with per-user session
 
 ### Photo Handler
 
@@ -169,12 +191,15 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 
 - **AIService**: Uses OpenAI SDK (`openai` package) with Vertex-Key.com as base URL. Manages per-user conversation history (messages array) with personalized system instructions. History is in-memory (Map, max 50 messages), not persisted. Post-processes responses to strip markdown formatting (bold, headers) and escape underscores. Also provides `generateDigest()`, `generateWeeklyReport()` (top tickers + sentiment shift) and `askAboutResearch()` for the Research OS, plus `generateTradeInsight()` for trade analytics.
 - **GoogleService**: Thin wrappers around Google APIs. Uses Service Account auth. Calendar defaults to `Asia/Ho_Chi_Minh` timezone.
-- **ResearchService** *(new)*: File-based persistence to `data/research.json`. Manages research items with auto-tagging (tickers via regex), category classification (keyword-based), sentiment scoring (rule-based), search (by keyword/ticker/category), star/bookmark, digest data aggregation, and weekly-report data (`getWeeklyReportData` — this-week vs last-week activity + per-ticker sentiment shift).
-- **PlanService** *(new)*: File-based persistence to `data/plans.json`. Manages subscription tiers (free/pro/premium), daily forward rate limiting, feature gating, and plan expiration. Accepts an admin-ID list (from `config.adminUserIds` / `ADMIN_USER_IDS`); admins are always treated as Premium (`isAdmin()`, `effectiveTier()` → all feature gates pass, unlimited forwards, always digest-eligible).
-- **UserService**: File-based persistence to `data/users.json`. Supports multi-doc aliases (e.g., `work` → `<docId>`). Auto-sets first added doc as active.
-- **TodoService**: File-based persistence to `data/todos.json`. Supports completion by index (1-based) or keyword search.
-- **TradeService** *(new)*: File-based persistence to `data/trades.json`. Manages the Trade Journal — open/close trades, auto-computes PnL% (price- or percent-based, direction-aware), and aggregates stats (win rate, total PnL, avg planned RR, best/worst). Pro-gated via `canTrade`. Also supports **research-to-trade link** (`linkResearch`/`getTradeById`, `linkedResearch: string[]` on each trade) — Premium-gated via `canLinkResearch`. On `Close:`, Premium users get an inline keyboard of recent research matching the ticker (callback `linkres:<tradeId>:<researchId>`); the `Trades` list shows a 🔗N tag for trades with links. Also provides **advanced analytics** (`getAnalytics` → breakdown by ticker/direction/month + avg hold duration over closed trades) — Premium-gated via `canAnalytics`, surfaced by the `Trade Analytics` command with an AI insight from `AIService.generateTradeInsight`.
-- **ThesisService** *(new)*: File-based persistence to `data/theses.json`. Records per-user theses (`ticker`, `stance` bullish/bearish, `text`) and detects contradictions: `findConflicts(userId, ticker, sentiment)` returns active theses whose stance is clearly opposed to a newly-saved research item's sentiment (±0.2 threshold) and bumps their `conflictCount`. Wired into the Save/forward flow in `index.ts`; Premium-gated via `canThesis`. Detection is rule-based (no AI call on the save hot path).
+- **ResearchService**: Persists to Postgres (`research_items`) via Drizzle. Manages research items with auto-tagging (tickers via regex), category classification (keyword-based), sentiment scoring (rule-based), search (by keyword/ticker/category), star/bookmark, digest data aggregation, and weekly-report data (`getWeeklyReportData` — this-week vs last-week activity + per-ticker sentiment shift).
+- **PlanService**: Persists to Postgres (`plans`). Manages subscription tiers (free/pro/premium), daily forward rate limiting, feature gating, plan expiration, and `digestEnabled` toggle. Accepts an admin-ID list (from `config.adminUserIds` / `ADMIN_USER_IDS`); admins are always treated as Premium (`isAdmin()`, `effectiveTier()` → all feature gates pass, unlimited forwards, always digest-eligible). `PlanLimits` now includes `maxWatchlist` (free 3, Pro+ -1) and `maxActiveAlerts` (free 0 = locked, Pro 10, Premium -1).
+- **UserService**: Persists to Postgres (`users`). Supports multi-doc aliases (e.g., `work` → `<docId>`). Auto-sets first added doc as active.
+- **TodoService**: Persists to Postgres (`todos`). Supports completion by index (1-based) or keyword search.
+- **TradeService**: Persists to Postgres (`trades`). Manages the Trade Journal — open/close trades, auto-computes PnL% (price- or percent-based, direction-aware), and aggregates stats (win rate, total PnL, avg planned RR, best/worst). Pro-gated via `canTrade`. Trade Journal 2.0 fields: `positionSize`, `riskPercent`, `feePercent` (net PnL after fee), `setupTag`, `closeReason` ('tp'|'sl'|'manual'), plus `actualR()` (R-multiple). Also supports **research-to-trade link** (`linkResearch`/`getTradeById`, `linkedResearch: string[]` on each trade) — Premium-gated via `canLinkResearch`. On `Close:`, Premium users get an inline keyboard of recent research matching the ticker (callback `linkres:<tradeId>:<researchId>`); the `Trades` list shows a 🔗N tag for trades with links. Also provides **advanced analytics** (`getAnalytics` → breakdown by ticker/direction/month + avg hold duration over closed trades) — Premium-gated via `canAnalytics`, surfaced by the `Trade Analytics` command with an AI insight from `AIService.generateTradeInsight`.
+- **ThesisService**: Persists to Postgres (`theses`). Records per-user theses (`ticker`, `stance` bullish/bearish, `text`) and detects contradictions: `findConflicts(userId, ticker, sentiment)` returns active theses whose stance is clearly opposed to a newly-saved research item's sentiment (±0.2 threshold) and bumps their `conflictCount`. Wired into the Save/forward flow in `index.ts`; Premium-gated via `canThesis`. Detection is rule-based (no AI call on the save hot path).
+- **AlertService** *(new, Sprint 8)*: Persists to Postgres (`alerts`). Price alert CRUD — `addAlert` (above/below + target), `getActiveAlerts`, `getAllActive` (for the cron), `deleteAlert`, `markTriggered`. Gated by `PlanLimits.maxActiveAlerts`.
+- **WatchlistService** *(new, Sprint 8)*: Persists to Postgres (`watchlist_items`, unique index user+ticker). `add` (onConflictDoNothing → 'added'|'exists'), `remove`, `getWatchlist`. Gated by `PlanLimits.maxWatchlist`.
+- **MarketService** *(new, Sprint 8)*: **No DB** — live crypto prices from Binance public REST API (no key). `getPrices()` (batch, used by per-minute alert cron) and `get24hStats()` (Watchlist). Maps ticker → `<BASE>USDT` symbol, 45s in-memory cache with negative-caching, 8s timeout, batch endpoint with per-symbol fallback. Best-effort: never throws, returns partial/empty maps on failure.
 - **ReportService** *(new)*: Generates a trade performance **PDF** with `pdfkit` (in-memory `Buffer`, sent via grammY `InputFile`). Renders a header banner, summary, a drawn monthly-PnL bar chart, by-ticker/by-direction tables, and a closed-trade log with multi-page support (`bufferPages: true` for the footer pass). PDF text is **ASCII/English** — pdfkit's built-in fonts can't render Vietnamese diacritics, so `index.ts` runs the trader name through a `toAscii()` helper. Premium-gated via `canExport`.
 
 ### Subscription Tiers
@@ -192,6 +217,8 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 | Star/Bookmark | ✅ | ✅ | ✅ |
 | Sentiment | ❌ | ❌ | ✅ |
 | Export | ❌ | ❌ | ✅ |
+| Watchlist | 3 tickers | Unlimited | Unlimited |
+| Price Alerts | ❌ | 10 active | Unlimited |
 | Max Docs | 1 | 5 | Unlimited |
 
 > **Admin override:** Telegram user IDs in `ADMIN_USER_IDS` (`.env`) are always treated as **Premium** regardless of stored plan — every gate passes, unlimited forwards, always digest-eligible. See `PlanService.isAdmin()` / `effectiveTier()`.
@@ -207,11 +234,14 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 
 **Weekly Report** — a `node-cron` job runs at **18:00 every Sunday (Asia/Ho_Chi_Minh)** that, for each digest-eligible (Pro/Premium) user with research in the last 7 days, builds `getWeeklyReportData()` and sends an AI report (`AIService.generateWeeklyReport()`) highlighting per-ticker sentiment shift vs the previous week.
 
+**Price Alert Checker** — a `node-cron` job runs **every minute** (`* * * * *`): loads all active alerts (`AlertService.getAllActive()`), batch-fetches prices via `MarketService.getPrices()`, marks hit alerts as triggered, and DMs the owner. Guarded by an in-flight flag (`alertCronBusy`) so overlapping runs are skipped.
+
 ### Data Persistence
 
-All data is stored as JSON files in `data/`. Read on service init, written synchronously on every mutation. **No database.**
+All data lives in **PostgreSQL (Supabase)** via **Drizzle ORM** — schema in `src/db/schema.ts` (8 tables: `users`, `plans`, `research_items`, `trades`, `theses`, `alerts`, `watchlist_items`, `todos`), connection in `src/db/index.ts` (`postgres` driver + `DATABASE_URL`). All service methods are **async**.
 
-> ⚠️ This means concurrent writes from multiple bot instances could corrupt data. Run only one instance.
+- Legacy JSON files in `data/` are no longer read at runtime — they were the pre-Sprint-7 store and remain only as the seed source for `npm run db:seed` (`src/scripts/migrate-json-to-db.ts`).
+- DB migration removed the old "single instance for data safety" constraint; the remaining single-instance limit is Telegram long-polling (one `getUpdates` consumer, see Windows Service section).
 
 ## Important Conventions
 
@@ -255,6 +285,11 @@ Dự án dùng hai AI agent với vai trò tách biệt:
 3. Update the `/help` command text to document it.
 4. If it's a slash command worth surfacing, add it to `BOT_COMMANDS` (the `setMyCommands` list) too.
 
+### Adding/changing a DB table or column
+1. Edit `src/db/schema.ts` (Drizzle `pgTable` definitions).
+2. Push to Supabase: `npm run db:push` — ⚠️ tạm đổi `DATABASE_URL` sang session pooler port 5432 (xem chú ý ở Environment Variables), xong đổi lại 6543.
+3. Update the corresponding service in `src/services/` (row ↔ item mapping if any).
+
 ### Adding a new Google API integration
 1. Add scope in `GoogleService` constructor's `scopes` array.
 2. Add method in `google.service.ts`.
@@ -267,6 +302,6 @@ Dự án dùng hai AI agent với vai trò tách biệt:
 - Change in `.env` — no code changes needed.
 
 ### Modifying user profile fields
-1. Update `UserProfile` interface in `user.service.ts`.
+1. Update `UserProfile` interface in `user.service.ts` **and** the `users` table in `src/db/schema.ts` (+ `npm run db:push`).
 2. Add detection regex in `index.ts` message handler.
 3. Call `aiService.refreshSession(userId)` after profile changes to rebuild system instruction.
