@@ -22,6 +22,14 @@ export const config = {
     lsWebhookSecret: process.env.LEMONSQUEEZY_WEBHOOK_SECRET || '',
     webhookPort: parseInt(process.env.WEBHOOK_PORT || '3000', 10),
 
+    // --- SePay Payment (VietQR bank transfer, for VN users) ---
+    sepayAccountNumber: process.env.SEPAY_ACCOUNT_NUMBER || '',
+    sepayBankCode: process.env.SEPAY_BANK_CODE || '',
+    sepayAccountHolder: process.env.SEPAY_ACCOUNT_HOLDER || '',
+    sepayApiKey: process.env.SEPAY_API_KEY || '',
+    sepayProPriceVnd: parseInt(process.env.SEPAY_PRO_PRICE_VND || '199000', 10),
+    sepayPremiumPriceVnd: parseInt(process.env.SEPAY_PREMIUM_PRICE_VND || '499000', 10),
+
     // --- Admin ---
     // Telegram user IDs with admin privileges (always treated as Premium).
     // Comma-separated in .env, e.g. ADMIN_USER_IDS=123,456
@@ -47,5 +55,9 @@ if (!config.vertexKeyApiKey) {
 
 if (!config.lsApiKey) {
     console.warn('⚠️  LEMONSQUEEZY_API_KEY not set — /upgrade command will be disabled.');
+}
+
+if (!config.sepayAccountNumber || !config.sepayBankCode || !config.sepayApiKey) {
+    console.warn('⚠️  SEPAY_* not fully set — VietQR payment option will be disabled.');
 }
 

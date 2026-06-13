@@ -17,6 +17,7 @@ export const plans = pgTable('plans', {
     dailyForwardCount: integer('daily_forward_count').notNull(),
     lastResetDate: text('last_reset_date').notNull(),
     lsOrderId: text('ls_order_id').unique(),
+    sepayTxId: text('sepay_tx_id').unique(),
     digestEnabled: boolean('digest_enabled').notNull().default(true),
 });
 

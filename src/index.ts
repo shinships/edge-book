@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard, InputFile } from 'grammy';
+import { Bot, Context, InlineKeyboard, InputFile } from 'grammy';
 import { config } from './config';
 import { AIService } from './services/ai.service';
 import { GoogleService, GoogleApiError } from './services/google.service';
@@ -7,6 +7,7 @@ import { TodoService } from './services/todo.service';
 import { ResearchService } from './services/research.service';
 import { PlanService } from './services/plan.service';
 import { PaymentService } from './services/payment.service';
+import { SepayService } from './services/sepay.service';
 import { TradeService } from './services/trade.service';
 import { ReportService } from './services/report.service';
 import { ThesisService, ThesisItem } from './services/thesis.service';
@@ -26,6 +27,7 @@ const userService = new UserService();
 const researchService = new ResearchService();
 const planService = new PlanService(config.adminUserIds);
 const paymentService = new PaymentService(planService);
+const sepayService = new SepayService(planService);
 const tradeService = new TradeService();
 const reportService = new ReportService();
 const thesisService = new ThesisService();
@@ -1687,8 +1689,10 @@ bot.command('upgrade', async (ctx) => {
     if (!userId) return;
 
     const plan = await planService.getPlan(userId);
+    const hasIntl = !!config.lsApiKey;
+    const hasVn = sepayService.isConfigured();
 
-    if (!config.lsApiKey) {
+    if (!hasIntl && !hasVn) {
         await ctx.reply('⚠️ Tính năng thanh toán chưa được kích hoạt. Vui lòng liên hệ admin.');
         return;
     }
@@ -1699,61 +1703,107 @@ bot.command('upgrade', async (ctx) => {
     }
 
     const keyboard = new InlineKeyboard()
-        .text('⭐ Pro · $9.99/tháng', 'upgrade_pro')
+        .text('⭐ Pro', 'upgrade_pro')
         .row()
-        .text('💎 Premium · $24.99/tháng', 'upgrade_premium');
+        .text('💎 Premium', 'upgrade_premium');
 
     const currentTierText = plan.tier === 'pro'
         ? 'Bạn đang dùng ⭐ Pro. Upgrade lên 💎 Premium để mở khoá Sentiment & Export.'
         : 'Chọn plan muốn nâng cấp:';
 
+    const proPrice = hasVn ? `$9.99/tháng (~${sepayService.getPrice('pro').toLocaleString('vi-VN')}đ)` : '$9.99/tháng';
+    const premiumPrice = hasVn ? `$24.99/tháng (~${sepayService.getPrice('premium').toLocaleString('vi-VN')}đ)` : '$24.99/tháng';
+
     await ctx.reply(
         `💳 Nâng cấp EdgeBook\n\n${currentTierText}\n\n` +
-        `⭐ Pro ($9.99/tháng):\n• Unlimited forwards\n• Search & Tag\n• Daily Digest\n• Ask AI\n\n` +
-        `💎 Premium ($24.99/tháng):\n• Tất cả Pro features\n• Sentiment scoring\n• Export research\n• Unlimited Docs`,
+        `⭐ Pro (${proPrice}):\n• Unlimited forwards\n• Search & Tag\n• Daily Digest\n• Ask AI\n\n` +
+        `💎 Premium (${premiumPrice}):\n• Tất cả Pro features\n• Sentiment scoring\n• Export research\n• Unlimited Docs`,
         { reply_markup: keyboard }
     );
 });
+
+// Send a LemonSqueezy checkout link (international cards)
+async function sendLsCheckout(ctx: Context, userId: number, tier: 'pro' | 'premium'): Promise<void> {
+    await ctx.reply('⏳ Đang tạo link thanh toán...');
+    const url = await paymentService.createCheckoutLink(userId, tier);
+
+    if (!url) {
+        await ctx.reply('❌ Không thể tạo link thanh toán. Vui lòng thử lại sau hoặc liên hệ admin.');
+        return;
+    }
+
+    const tierLabel = tier === 'pro' ? '⭐ Pro ($9.99/tháng)' : '💎 Premium ($24.99/tháng)';
+    await ctx.reply(
+        `${tierLabel} — link thanh toán thẻ quốc tế:\n\n${url}\n\n` +
+        `⏰ Link có hiệu lực trong 30 phút.\n` +
+        `Sau khi thanh toán, plan sẽ tự động cập nhật! 🚀`
+    );
+}
+
+// Send a SePay VietQR code for direct bank-transfer payment (VN users)
+async function sendSepayQuote(ctx: Context, userId: number, tier: 'pro' | 'premium'): Promise<void> {
+    const { qrUrl, amount, content } = sepayService.generateQuote(userId, tier);
+    const tierLabel = tier === 'pro' ? '⭐ Pro' : '💎 Premium';
+
+    await ctx.replyWithPhoto(qrUrl, {
+        caption:
+            `${tierLabel} — Chuyển khoản VietQR\n\n` +
+            `Số tiền: ${amount.toLocaleString('vi-VN')}đ\n` +
+            `Nội dung CK: ${content}\n\n` +
+            `Quét mã hoặc chuyển khoản đúng nội dung và số tiền trên. Hệ thống tự nhận diện và nâng cấp plan trong vài giây, không cần làm gì thêm.`,
+    });
+}
+
+// Pick a payment method: skip the menu if only one is configured.
+async function choosePaymentMethod(ctx: Context, userId: number, tier: 'pro' | 'premium'): Promise<void> {
+    const hasIntl = !!config.lsApiKey;
+    const hasVn = sepayService.isConfigured();
+
+    if (hasIntl && hasVn) {
+        const keyboard = new InlineKeyboard()
+            .text('💳 Thẻ quốc tế', `pay:${tier}:intl`)
+            .row()
+            .text('🇻🇳 Chuyển khoản VietQR', `pay:${tier}:vn`);
+        const tierLabel = tier === 'pro' ? '⭐ Pro' : '💎 Premium';
+        await ctx.reply(`${tierLabel} — chọn phương thức thanh toán:`, { reply_markup: keyboard });
+    } else if (hasVn) {
+        await sendSepayQuote(ctx, userId, tier);
+    } else if (hasIntl) {
+        await sendLsCheckout(ctx, userId, tier);
+    } else {
+        await ctx.reply('❌ Chưa cấu hình phương thức thanh toán. Liên hệ admin.');
+    }
+}
 
 // Handle upgrade inline keyboard callbacks
 bot.callbackQuery('upgrade_pro', async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = ctx.from?.id;
     if (!userId) return;
-
-    await ctx.reply('⏳ Đang tạo link thanh toán...');
-    const url = await paymentService.createCheckoutLink(userId, 'pro');
-
-    if (!url) {
-        await ctx.reply('❌ Không thể tạo link thanh toán. Vui lòng thử lại sau hoặc liên hệ admin.');
-        return;
-    }
-
-    await ctx.reply(
-        `⭐ Link thanh toán Pro ($9.99/tháng):\n\n${url}\n\n` +
-        `⏰ Link có hiệu lực trong 30 phút.\n` +
-        `Sau khi thanh toán, plan sẽ tự động cập nhật! 🚀`
-    );
+    await choosePaymentMethod(ctx, userId, 'pro');
 });
 
 bot.callbackQuery('upgrade_premium', async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = ctx.from?.id;
     if (!userId) return;
+    await choosePaymentMethod(ctx, userId, 'premium');
+});
 
-    await ctx.reply('⏳ Đang tạo link thanh toán...');
-    const url = await paymentService.createCheckoutLink(userId, 'premium');
+// Handle payment-method selection (only shown when both methods are configured)
+bot.callbackQuery(/^pay:(pro|premium):(intl|vn)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const userId = ctx.from?.id;
+    if (!userId) return;
 
-    if (!url) {
-        await ctx.reply('❌ Không thể tạo link thanh toán. Vui lòng thử lại sau hoặc liên hệ admin.');
-        return;
+    const tier = ctx.match[1] as 'pro' | 'premium';
+    const method = ctx.match[2] as 'intl' | 'vn';
+
+    if (method === 'intl') {
+        await sendLsCheckout(ctx, userId, tier);
+    } else {
+        await sendSepayQuote(ctx, userId, tier);
     }
-
-    await ctx.reply(
-        `💎 Link thanh toán Premium ($24.99/tháng):\n\n${url}\n\n` +
-        `⏰ Link có hiệu lực trong 30 phút.\n` +
-        `Sau khi thanh toán, plan sẽ tự động cập nhật! 🚀`
-    );
 });
 
 // Research-to-trade link callbacks (Premium)
@@ -1983,7 +2033,7 @@ bot.catch((err) => {
 });
 
 // Start webhook server (runs alongside bot polling)
-startWebhookServer(paymentService, bot);
+startWebhookServer(paymentService, sepayService, bot);
 
 // Start the bot
 bot.start({
@@ -1991,6 +2041,7 @@ bot.start({
         console.log(`EdgeBook bot @${botInfo.username} started!`);
         console.log('EdgeBook features enabled: auto-tag, search, digest, star, stats, trade journal');
         console.log('Payment: /upgrade command enabled' + (config.lsApiKey ? '' : ' (⚠️ LS keys not set)'));
+        console.log('Payment: SePay VietQR ' + (sepayService.isConfigured() ? 'enabled' : '(⚠️ SEPAY_* not set)'));
         try {
             await bot.api.setMyCommands(BOT_COMMANDS);
             console.log(`Registered ${BOT_COMMANDS.length} bot commands in the "/" menu.`);

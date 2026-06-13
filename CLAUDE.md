@@ -47,7 +47,7 @@ edge-book/
 ├── src/
 │   ├── config.ts               # Loads env vars, validates required keys
 │   ├── index.ts                # Entry point — bot commands, message handlers, cron jobs
-│   ├── webhook.server.ts       # Express HTTP server for LemonSqueezy payment webhooks
+│   ├── webhook.server.ts       # Express HTTP server for payment webhooks (LemonSqueezy + SePay)
 │   ├── db/
 │   │   ├── index.ts            # postgres client + drizzle instance (exits if DATABASE_URL missing)
 │   │   └── schema.ts           # Drizzle schema: users, plans, research_items, trades, theses, alerts, watchlist_items, discipline_state, todos
@@ -63,6 +63,7 @@ edge-book/
 │   │   ├── plan.service.ts     # Subscription tier tracking & feature gating
 │   │   ├── report.service.ts   # PDF trade report generation via pdfkit (Premium export)
 │   │   ├── research.service.ts # Research items: auto-tagging, search, star, digest data
+│   │   ├── sepay.service.ts    # SePay VietQR bank-transfer: QR generation, webhook auth/parse, upgrade logic (Sprint 10)
 │   │   ├── thesis.service.ts   # Thesis tracker: record theses + conflict detection vs research sentiment (Premium)
 │   │   ├── todo.service.ts     # To-do CRUD per user
 │   │   ├── trade.service.ts    # Trade Journal: open/close trades, PnL calc, stats, analytics (Pro/Premium)
@@ -136,10 +137,16 @@ EdgeBook can run as a background Windows service (auto-start on boot, auto-resta
 | `LEMONSQUEEZY_PREMIUM_VARIANT_ID` | Optional | LS Variant ID for Premium plan       |
 | `LEMONSQUEEZY_WEBHOOK_SECRET` | Optional | Webhook signing secret for HMAC verify   |
 | `WEBHOOK_PORT`                | Optional | Port for webhook Express server (default: `3000`) |
+| `SEPAY_ACCOUNT_NUMBER`        | Optional | Bank account number receiving transfers — required to enable VietQR in `/upgrade` |
+| `SEPAY_BANK_CODE`             | Optional | SePay bank short code (e.g. `MBBank`, `Vietcombank`) for VietQR generation |
+| `SEPAY_ACCOUNT_HOLDER`        | Optional | Account holder name shown on the generated QR |
+| `SEPAY_API_KEY`               | Optional | SePay webhook API key, verified as `Authorization: Apikey <key>` |
+| `SEPAY_PRO_PRICE_VND`         | Optional | Pro price in VND (default `199000`)      |
+| `SEPAY_PREMIUM_PRICE_VND`     | Optional | Premium price in VND (default `499000`)  |
 | `ADMIN_USER_IDS`              | Optional | Comma-separated Telegram user IDs treated as admins (always Premium access) |
 
 `TELEGRAM_BOT_TOKEN`, `VERTEX_KEY_API_KEY` (in `config.ts`) and `DATABASE_URL` (in `src/db/index.ts`) are validated on startup — app exits if missing.
-LemonSqueezy keys are optional; if absent, the `/upgrade` command shows a "not configured" message.
+LemonSqueezy keys are optional; if absent, the international-card option is hidden from `/upgrade`. SePay keys are optional; if absent, the VietQR option is hidden. If neither is configured, `/upgrade` shows a "not configured" message.
 
 > ⚠️ **Supabase pooler gotcha:** runtime dùng transaction pooler (port **6543**) là OK, nhưng `npm run db:push` với drizzle-kit sẽ **treo ở "Pulling schema"** trên pooler này. Khi đổi schema: tạm sửa `DATABASE_URL` trong `.env` sang **session pooler port 5432**, chạy `db:push`, rồi đổi lại.
 
@@ -208,6 +215,8 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 - **MarketService** *(new, Sprint 8)*: **No DB** — live crypto prices from Binance public REST API (no key). `getPrices()` (batch, used by per-minute alert cron) and `get24hStats()` (Watchlist). Maps ticker → `<BASE>USDT` symbol, 45s in-memory cache with negative-caching, 8s timeout, batch endpoint with per-symbol fallback. Best-effort: never throws, returns partial/empty maps on failure.
 - **DisciplineService** *(new, Sprint 9)*: Persists to Postgres (`discipline_state`, 1 row/user, auto-created with defaults: enabled, limit 3). Tracks loss streak (`recordLoss`/`recordWin`), daily loss counter (VN-timezone date string, lazy reset on read), `dailyLossLimit`, and `cooldownUntil` (set to end of VN day when the limit is hit). The 15s safety gate itself is in-memory in `index.ts` (`pendingTrades` Map), not in this service. Trade journal psychology fields (`emotionScore`, `heartRate`, `disciplined`) live on `trades` and are managed by `TradeService.setEmotion`/`setDisciplined`; `getStats()` exposes `disciplinedPnl` (PnL minus undisciplined "lucky" wins), `disciplineRate`, and `getAnalytics()` adds `byEmotion` (calm ≤5 vs stressed ≥7, requires ≥3 scored trades).
 - **ReportService** *(new)*: Generates a trade performance **PDF** with `pdfkit` (in-memory `Buffer`, sent via grammY `InputFile`). Renders a header banner, summary, a drawn monthly-PnL bar chart, by-ticker/by-direction tables, and a closed-trade log with multi-page support (`bufferPages: true` for the footer pass). PDF text is **ASCII/English** — pdfkit's built-in fonts can't render Vietnamese diacritics, so `index.ts` runs the trader name through a `toAscii()` helper. Premium-gated via `canExport`.
+- **PaymentService**: LemonSqueezy checkout — `createCheckoutLink(userId, tier)` passes `user_id`/`tier` as `custom_data` so the webhook can identify the buyer; `verifyWebhookSignature()` (HMAC-SHA256 over the raw body); `handleWebhookEvent()` validates `order_created`/`paid`, checks `plans.lsOrderId` for idempotency, then `planService.upgradePlan(userId, tier, 30, orderId)`.
+- **SepayService** *(new, Sprint 10)*: VietQR bank-transfer payment for VN users — **no pending-order table**. `generateQuote(userId, tier)` builds a `qr.sepay.vn/img` URL with a payment content string `EBOOK<userId><PRO|PRE>` encoding the buyer + tier directly, plus the VND amount (`SEPAY_PRO_PRICE_VND`/`SEPAY_PREMIUM_PRICE_VND`). `verifyAuth()` checks the `Authorization: Apikey <SEPAY_API_KEY>` header SePay sends with each webhook. `handleWebhookEvent()` parses that content back out of the transaction `content`/`description`, checks `transferAmount` against the expected price, dedupes via `plans.sepayTxId` (unique), then `planService.upgradePlan(userId, tier, 30, undefined, txId)`.
 
 ### Subscription Tiers
 

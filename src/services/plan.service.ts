@@ -13,6 +13,7 @@ export interface UserPlan {
     dailyForwardCount: number;
     lastResetDate: string;
     lsOrderId?: string;
+    sepayTxId?: string;
     digestEnabled: boolean;
 }
 
@@ -90,6 +91,7 @@ function toPlan(row: PlanRow): UserPlan {
         dailyForwardCount: row.dailyForwardCount,
         lastResetDate: row.lastResetDate,
         lsOrderId: row.lsOrderId ?? undefined,
+        sepayTxId: row.sepayTxId ?? undefined,
         digestEnabled: row.digestEnabled,
     };
 }
@@ -177,7 +179,7 @@ export class PlanService {
         await db.update(plans).set({ digestEnabled: enabled }).where(eq(plans.userId, userId));
     }
 
-    async upgradePlan(userId: number, tier: PlanTier, durationDays?: number, orderId?: string): Promise<void> {
+    async upgradePlan(userId: number, tier: PlanTier, durationDays?: number, orderId?: string, sepayTxId?: string): Promise<void> {
         await this.getPlan(userId); // ensure exists
 
         let expiresAt: Date | null = null;
@@ -189,6 +191,7 @@ export class PlanService {
         const set: Partial<typeof plans.$inferInsert> = { tier };
         if (expiresAt !== null) set.expiresAt = expiresAt;
         if (orderId) set.lsOrderId = orderId;
+        if (sepayTxId) set.sepayTxId = sepayTxId;
 
         await db.update(plans).set(set).where(eq(plans.userId, userId));
     }
