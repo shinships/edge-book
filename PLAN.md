@@ -26,8 +26,9 @@
 | **Digest On/Off toggle** | ✅ 2026-06-10 — lệnh `Digest On`/`Digest Off` (cột `plans.digest_enabled`, default true); cron digest/weekly tôn trọng setting, admin cũng theo setting riêng. |
 | **Sprint 8 — Trade Journal 2.0 + Alerts/Watchlist** | ✅ 2026-06-12 — `Trade:` thêm `size/risk/fee/setup`, `Close:` thêm `closeReason`, R-multiple; `MarketService` (Binance giá live), `Watch:`/`Watchlist` (free 3, Pro+ unlimited), `Alert:`/`Alerts` (Pro 10, Premium unlimited) + cron check mỗi phút. |
 | **Sprint 9 — Discipline & Psychology OS** | ✅ 2026-06-13 — 5 tính năng kỷ luật/tâm lý (Pro, cùng `canTrade`): chốt an toàn 15s + checklist trước khi vào lệnh (`Discipline On/Off`), chấm điểm cảm xúc/nhịp tim (`emo`/`hr`, cảnh báo ngưỡng cao), tự giảm 50% risk + khoá `Trade:` sau N lệnh thua/ngày (`Limit:`), đối soát "nhà giao dịch hoàn hảo" cuối ngày (cron 21:00 + `Review`/`Audit`, loại PnL ăn may), phản hồi vị tha/không phán xét sau lệnh lỗ. Bảng mới `discipline_state` + 3 cột trên `trades`. |
+| **Sprint 10 — SePay VietQR payment** | ✅ 2026-06-13 (code) — `/upgrade` hỗ trợ thêm thanh toán chuyển khoản VietQR (SePay) song song với LemonSqueezy: tự sinh mã QR `qr.sepay.vn` kèm số tiền + nội dung CK `EBOOK<userId><PRO\|PRE>`, webhook `/webhook/sepay` (auth `Apikey`) đối soát giao dịch và tự nâng cấp plan. Cột mới `plans.sepay_tx_id` (idempotency). ⚠️ **Chưa có `SEPAY_*` thật trong `.env`** → tuỳ chọn VietQR đang ẩn, cần điền tài khoản/API key + smoke-test trước khi merge `main`. |
 
-> **Tầng 2 (Research Hub / Phase 2) và Tầng 3 (Trade Journal / Phase 3) đều hoàn tất 100%.** Sprint 7 (DB Migration), Sprint 8 (Trade Journal 2.0 + Alerts/Watchlist) và Sprint 9 (Discipline & Psychology OS) đã hoàn tất, **DB Supabase đã live** (2026-06-10). Sẵn sàng mở Phase 4 (Team & API).
+> **Tầng 2 (Research Hub / Phase 2) và Tầng 3 (Trade Journal / Phase 3) đều hoàn tất 100%.** Sprint 7 (DB Migration), Sprint 8 (Trade Journal 2.0 + Alerts/Watchlist), Sprint 9 (Discipline & Psychology OS) đã hoàn tất và Sprint 10 (SePay VietQR) đã code xong (chờ config thật), **DB Supabase đã live** (2026-06-10). Sẵn sàng mở Phase 4 (Team & API).
 
 ### Roadmap còn lại
 | Hạng mục | Loại | Ưu tiên |
@@ -37,18 +38,21 @@
 | Phase 4 — Team workspace, role-based, Webhook/API, Discord/X bridge | Feature lớn | 🟡 Sau khi DB đã live |
 | Tầng 3 vision — multi-source aggregation, portfolio/PnL linkage, web dashboard (Next.js) | Feature lớn | 🟢 Dài hạn |
 | Go-to-Market (§6 — seed groups, content, KOL) | Tăng trưởng | 🟡 Song song |
-| `service_account.json`, LemonSqueezy keys | Vận hành | 🔴 Blocker để chạy thật (`.env.example` ✅ đã có) |
+| `service_account.json`, LemonSqueezy keys, SePay keys | Vận hành | 🔴 Blocker để chạy thật (`.env.example` ✅ đã có) |
 
 **Đang chờ / TODO vận hành:**
 - ✅ `DATABASE_URL` — DB Supabase đã live. Lưu ý khi đổi schema: `npm run db:push` phải tạm đổi `.env` sang session pooler port 5432 (drizzle-kit treo trên transaction pooler 6543), xong đổi lại.
 - `service_account.json` (Google APIs — Save Docs/Calendar/upload ảnh). **Gitignored** → phải copy thủ công, KHÔNG commit.
 - `.env` cũng gitignored. ✅ Đã có `.env.example` với đủ 15 biến; chỉ cần `cp .env.example .env` rồi điền.
-- LemonSqueezy keys (bật `/upgrade`). Khi chưa có → test Premium bằng `ADMIN_USER_IDS` trong `.env`.
+- LemonSqueezy keys (bật `/upgrade` thẻ quốc tế). Khi chưa có → test Premium bằng `ADMIN_USER_IDS` trong `.env`.
+- `SEPAY_ACCOUNT_NUMBER`/`SEPAY_BANK_CODE`/`SEPAY_API_KEY` (bật `/upgrade` VietQR cho user VN). Đăng ký SePay, link tài khoản nhận tiền, cấu hình webhook `https://<domain>/webhook/sepay` với API key trong dashboard SePay.
 - ✅ Multi-instance: sau khi chuyển sang PostgreSQL, giới hạn "chỉ 1 instance" đã được gỡ (không còn JSON race condition).
 
 **Sprint kế tiếp (ứng viên):** Phase 4 — Team workspace, role-based access, Webhook/API.
 
 > 📌 Cần smoke-test Sprint 9 trên bot thật (`Trade:` → checklist 15s → emo prompt; `Close:` lỗ → giảm size + audit vị tha; `Limit:`/`Discipline Off`; chờ cron 21:00 audit "perfect trader").
+>
+> 📌 Sprint 10 (SePay): sau khi điền `SEPAY_*` thật, smoke-test `/upgrade` → chọn VietQR → quét/chuyển khoản đúng nội dung `EBOOK<userId>PRO` → webhook tự nâng cấp plan + DM xác nhận. Cần máy chạy bot/webhook server reachable từ internet (domain hoặc tunnel) để SePay gọi được `/webhook/sepay`.
 
 ---
 
