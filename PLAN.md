@@ -24,8 +24,10 @@
 | **Sprint 7 — Migrate JSON → DB** | ✅ 2026-06-03 — Drizzle ORM + PostgreSQL/Supabase: schema 6 bảng, rewrite 6 services sang async, seed script, drizzle.config.ts, npm scripts `db:push/generate/migrate/seed`. Gỡ giới hạn "chỉ 1 instance". |
 | **DB live (Supabase)** | ✅ 2026-06-10 — `DATABASE_URL` đã cấu hình, schema đã push, bot chạy live trên Supabase. ⚠️ Migration (`db:push`) phải dùng **session pooler port 5432** — transaction pooler 6543 (runtime) làm drizzle-kit treo ở "Pulling schema". |
 | **Digest On/Off toggle** | ✅ 2026-06-10 — lệnh `Digest On`/`Digest Off` (cột `plans.digest_enabled`, default true); cron digest/weekly tôn trọng setting, admin cũng theo setting riêng. |
+| **Sprint 8 — Trade Journal 2.0 + Alerts/Watchlist** | ✅ 2026-06-12 — `Trade:` thêm `size/risk/fee/setup`, `Close:` thêm `closeReason`, R-multiple; `MarketService` (Binance giá live), `Watch:`/`Watchlist` (free 3, Pro+ unlimited), `Alert:`/`Alerts` (Pro 10, Premium unlimited) + cron check mỗi phút. |
+| **Sprint 9 — Discipline & Psychology OS** | ✅ 2026-06-13 — 5 tính năng kỷ luật/tâm lý (Pro, cùng `canTrade`): chốt an toàn 15s + checklist trước khi vào lệnh (`Discipline On/Off`), chấm điểm cảm xúc/nhịp tim (`emo`/`hr`, cảnh báo ngưỡng cao), tự giảm 50% risk + khoá `Trade:` sau N lệnh thua/ngày (`Limit:`), đối soát "nhà giao dịch hoàn hảo" cuối ngày (cron 21:00 + `Review`/`Audit`, loại PnL ăn may), phản hồi vị tha/không phán xét sau lệnh lỗ. Bảng mới `discipline_state` + 3 cột trên `trades`. |
 
-> **Tầng 2 (Research Hub / Phase 2) và Tầng 3 (Trade Journal / Phase 3) đều hoàn tất 100%.** Sprint 7 (DB Migration) hoàn tất và **DB Supabase đã live** (2026-06-10). Sẵn sàng mở Phase 4 (Team & API).
+> **Tầng 2 (Research Hub / Phase 2) và Tầng 3 (Trade Journal / Phase 3) đều hoàn tất 100%.** Sprint 7 (DB Migration), Sprint 8 (Trade Journal 2.0 + Alerts/Watchlist) và Sprint 9 (Discipline & Psychology OS) đã hoàn tất, **DB Supabase đã live** (2026-06-10). Sẵn sàng mở Phase 4 (Team & API).
 
 ### Roadmap còn lại
 | Hạng mục | Loại | Ưu tiên |
@@ -45,6 +47,8 @@
 - ✅ Multi-instance: sau khi chuyển sang PostgreSQL, giới hạn "chỉ 1 instance" đã được gỡ (không còn JSON race condition).
 
 **Sprint kế tiếp (ứng viên):** Phase 4 — Team workspace, role-based access, Webhook/API.
+
+> 📌 Cần smoke-test Sprint 9 trên bot thật (`Trade:` → checklist 15s → emo prompt; `Close:` lỗ → giảm size + audit vị tha; `Limit:`/`Discipline Off`; chờ cron 21:00 audit "perfect trader").
 
 ---
 
