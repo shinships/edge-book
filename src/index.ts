@@ -1242,6 +1242,7 @@ bot.on('message:text', async (ctx) => {
                 toAscii(profile.fullName || profile.username || '') || `Trader ${userId}`;
             const pdf = await reportService.generateTradeReport({
                 traderName,
+                botUsername: bot.botInfo.username,
                 generatedAt: new Date(),
                 stats,
                 analytics,
