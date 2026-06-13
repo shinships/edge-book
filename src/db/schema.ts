@@ -52,6 +52,9 @@ export const trades = pgTable('trades', {
     feePercent: real('fee_percent'),
     closeReason: text('close_reason'),   // 'tp' | 'sl' | 'manual'
     setupTag: text('setup_tag'),
+    emotionScore: integer('emotion_score'),   // 1-10 self-rated state at entry
+    heartRate: integer('heart_rate'),         // bpm at entry (optional, smartwatch)
+    disciplined: boolean('disciplined'),      // null = not audited, true = followed plan, false = violated
     openedAt: timestamp('opened_at', { withTimezone: true }).notNull(),
     closedAt: timestamp('closed_at', { withTimezone: true }),
 });
@@ -85,6 +88,16 @@ export const watchlistItems = pgTable('watchlist_items', {
     ticker: text('ticker').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 }, (t) => [uniqueIndex('watchlist_user_ticker_idx').on(t.userId, t.ticker)]);
+
+export const disciplineState = pgTable('discipline_state', {
+    userId: bigint('user_id', { mode: 'number' }).primaryKey(),
+    enabled: boolean('enabled').notNull().default(true),
+    lossStreak: integer('loss_streak').notNull().default(0),
+    lossDate: text('loss_date'),                      // VN-timezone date string the loss counter belongs to
+    lossesToday: integer('losses_today').notNull().default(0),
+    dailyLossLimit: integer('daily_loss_limit').notNull().default(3),
+    cooldownUntil: timestamp('cooldown_until', { withTimezone: true }),
+});
 
 export const todos = pgTable('todos', {
     id: bigint('id', { mode: 'number' }).primaryKey(),

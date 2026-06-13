@@ -13,6 +13,8 @@ import { ThesisService, ThesisItem } from './services/thesis.service';
 import { MarketService } from './services/market.service';
 import { AlertService } from './services/alert.service';
 import { WatchlistService } from './services/watchlist.service';
+import { DisciplineService } from './services/discipline.service';
+import { TradeItem } from './services/trade.service';
 import { startWebhookServer } from './webhook.server';
 import cron from 'node-cron';
 
@@ -30,6 +32,7 @@ const thesisService = new ThesisService();
 const marketService = new MarketService();
 const alertService = new AlertService();
 const watchlistService = new WatchlistService();
+const disciplineService = new DisciplineService();
 
 // Parse a positive price string that may use a "k" suffix (e.g. "108k" -> 108000).
 // Returns undefined for malformed input (e.g. "1.2.3", ".", "0", negatives).
@@ -101,6 +104,119 @@ async function buildPriceBlock(tickers: string[]): Promise<string> {
         console.error('[Digest] price enrichment skipped:', e);
         return '';
     }
+}
+
+// --- DISCIPLINE: 15s safety gate (in-memory, like AI sessions) ---
+
+type OpenTradeParams = Parameters<TradeService['openTrade']>[1];
+
+interface PendingTrade {
+    params: OpenTradeParams;
+    createdAt: number;
+    checks: boolean[];
+}
+
+const pendingTrades = new Map<number, PendingTrade>();
+const SAFETY_DELAY_MS = 15_000;
+const PENDING_TTL_MS = 10 * 60_000;
+
+const SAFETY_CHECKLIST = [
+    'Đúng setup trong kế hoạch?',
+    'Risk đúng kế hoạch, không tăng size gỡ lỗ?',
+    'Không phải FOMO / revenge trade?',
+];
+
+function safetyKeyboard(pending: PendingTrade): InlineKeyboard {
+    const kb = new InlineKeyboard();
+    SAFETY_CHECKLIST.forEach((q, i) => {
+        kb.text(`${pending.checks[i] ? '✅' : '⬜'} ${q}`, `dchk:${i}`).row();
+    });
+    const elapsed = Date.now() - pending.createdAt;
+    const waitLeft = Math.max(0, Math.ceil((SAFETY_DELAY_MS - elapsed) / 1000));
+    kb.text(waitLeft > 0 ? `🔓 Vào lệnh (chờ ${waitLeft}s)` : '🔓 Vào lệnh', 'dgo')
+        .text('✖️ Huỷ', 'dcancel');
+    return kb;
+}
+
+function emotionKeyboard(tradeId: string): InlineKeyboard {
+    const kb = new InlineKeyboard();
+    for (let i = 1; i <= 5; i++) kb.text(`${i}`, `emo:${tradeId}:${i}`);
+    kb.row();
+    for (let i = 6; i <= 10; i++) kb.text(`${i}`, `emo:${tradeId}:${i}`);
+    kb.row().text('Bỏ qua', `emoskip:${tradeId}`);
+    return kb;
+}
+
+// Warning when emotion score or heart rate signals cortisol/adrenaline overload.
+function emotionWarning(score?: number, heartRate?: number): string | null {
+    const stressed = (score !== undefined && score >= 8) || (heartRate !== undefined && heartRate >= 110);
+    if (!stressed) return null;
+    return (
+        '🚨 Cảnh báo tâm lý: ' +
+        (heartRate !== undefined && heartRate >= 110 ? `nhịp tim ${heartRate} bpm` : `mức căng thẳng ${score}/10`) +
+        ' cho thấy cơ thể đang bơm cortisol và adrenaline, bạn đang mất dần sự sáng suốt.\n' +
+        '💡 Đứng dậy, rời màn hình 10 phút và hít thở sâu. Cân nhắc không vào thêm lệnh hôm nay.'
+    );
+}
+
+// Build the open-trade confirmation message (shared by the direct path and the safety-gate path).
+function buildOpenReply(trade: TradeItem): string {
+    const dirEmoji = trade.direction === 'long' ? '🟢' : '🔴';
+    const reversed =
+        (trade.stopLoss !== undefined && trade.takeProfit !== undefined) &&
+        (trade.direction === 'long'
+            ? !(trade.takeProfit > trade.entryPrice && trade.stopLoss < trade.entryPrice)
+            : !(trade.takeProfit < trade.entryPrice && trade.stopLoss > trade.entryPrice));
+    return (
+        `${dirEmoji} Đã mở lệnh ${trade.direction.toUpperCase()} ${trade.ticker}\n` +
+        `Entry: ${formatPrice(trade.entryPrice)}` +
+        (trade.stopLoss !== undefined ? `\nSL: ${formatPrice(trade.stopLoss)}` : '') +
+        (trade.takeProfit !== undefined ? `\nTP: ${formatPrice(trade.takeProfit)}` : '') +
+        (trade.positionSize !== undefined ? `\nSize: ${formatPrice(trade.positionSize)}` : '') +
+        (trade.riskPercent !== undefined ? `\nRisk: ${trade.riskPercent}%/tài khoản` : '') +
+        (trade.feePercent !== undefined ? `\nFee: ${trade.feePercent}%` : '') +
+        (trade.setupTag ? `\nSetup: #${trade.setupTag}` : '') +
+        (trade.emotionScore !== undefined ? `\nEmotion: ${trade.emotionScore}/10` : '') +
+        (trade.heartRate !== undefined ? `\nNhịp tim: ${trade.heartRate} bpm` : '') +
+        (reversed ? '\n⚠️ SL/TP ngược chiều với hướng lệnh, sẽ không tính RR.' : '')
+    );
+}
+
+// Post-open follow-ups: stress warning + emotion prompt when not yet scored.
+async function sendOpenFollowups(
+    send: (text: string, opts?: { reply_markup: InlineKeyboard }) => Promise<unknown>,
+    trade: TradeItem
+): Promise<void> {
+    const warn = emotionWarning(trade.emotionScore, trade.heartRate);
+    if (warn) await send(warn);
+    if (trade.emotionScore === undefined) {
+        await send(
+            '🧠 Trạng thái cảm xúc lúc vào lệnh? (1 = rất bình tĩnh, 10 = cực căng thẳng)',
+            { reply_markup: emotionKeyboard(trade.id) }
+        );
+    }
+}
+
+// Format the remaining cooldown as "Xh Ym".
+function formatCooldownLeft(until: Date): string {
+    const mins = Math.max(1, Math.round((until.getTime() - Date.now()) / 60_000));
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+// Build a short label for a closed trade in audit prompts.
+function auditLabel(t: TradeItem): string {
+    const pnl = t.pnlPercent ?? 0;
+    const e = pnl > 0 ? '✅' : '❌';
+    return `${e} ${t.direction.toUpperCase()} ${t.ticker} ${fmtPct(pnl)}` +
+        (t.setupTag ? ` · #${t.setupTag}` : '');
+}
+
+function auditKeyboard(tradeId: string): InlineKeyboard {
+    return new InlineKeyboard()
+        .text('✅ Đúng quy trình', `audit:${tradeId}:1`)
+        .text('❌ Vi phạm', `audit:${tradeId}:0`);
 }
 
 // Build a short, single-line preview label for a research item (for inline buttons).
@@ -227,10 +343,17 @@ bot.command('help', (ctx) => {
         '\n' +
         '📈 Trade Journal (Pro)\n' +
         '• Trade: Long BTC entry 108k SL 105k TP 115k → mở lệnh\n' +
-        '• Thêm tuỳ chọn: size 500 risk 1% fee 0.1% setup breakout\n' +
+        '• Thêm tuỳ chọn: size 500 risk 1% fee 0.1% setup breakout emo 7 hr 95\n' +
         '• Close: BTC 112k · Close: BTC +3.2% · Close: BTC 105k sl\n' +
         '• Trades · Trade Stats\n' +
         '• Trade Analytics · Equity · Export PDF (Premium)\n' +
+        '\n' +
+        '🧠 Discipline & Psychology (Pro)\n' +
+        '• Trade: qua chốt an toàn 15s + checklist (mặc định bật)\n' +
+        '• Discipline → trạng thái · Discipline On/Off\n' +
+        '• Limit: 3 → giới hạn lệnh thua/ngày, chạm là khoá Trade:\n' +
+        '• Review → đối soát quy trình các lệnh đóng hôm nay\n' +
+        '• Thua lệnh → bot hỏi có tuân thủ kế hoạch, nhắc giảm 50% size\n' +
         '\n' +
         '💹 Market & Alerts\n' +
         '• Watch: BTC · Unwatch: BTC · Watchlist → giá live + 24h\n' +
@@ -637,7 +760,21 @@ bot.on('message:text', async (ctx) => {
             return;
         }
 
-        const trade = await tradeService.openTrade(userId, {
+        // Optional psychology fields: emo 1-10 (emotion score), hr <bpm> (heart rate).
+        const emoRaw = rest.match(/\bemo\s+(\S+)/i)?.[1];
+        const hrRaw = rest.match(/\bhr\s+(\S+)/i)?.[1];
+        const emo = emoRaw !== undefined && /^\d{1,2}$/.test(emoRaw) ? parseInt(emoRaw, 10) : undefined;
+        if (emoRaw !== undefined && (emo === undefined || emo < 1 || emo > 10)) {
+            await ctx.reply('⚠️ Giá trị emo không hợp lệ (1-10). Ví dụ: emo 7');
+            return;
+        }
+        const hr = hrRaw !== undefined && /^\d{2,3}$/.test(hrRaw) ? parseInt(hrRaw, 10) : undefined;
+        if (hrRaw !== undefined && (hr === undefined || hr < 30 || hr > 250)) {
+            await ctx.reply('⚠️ Nhịp tim không hợp lệ (30-250 bpm). Ví dụ: hr 95');
+            return;
+        }
+
+        const params: OpenTradeParams = {
             ticker,
             direction,
             entryPrice: entry,
@@ -647,26 +784,40 @@ bot.on('message:text', async (ctx) => {
             riskPercent: risk,
             feePercent: fee,
             setupTag: setup,
-        });
+            emotionScore: emo,
+            heartRate: hr,
+        };
+
+        // Discipline gate (default ON): cooldown lock + 15s safety switch with checklist.
+        const dstate = await disciplineService.getState(userId);
+        if (dstate.enabled) {
+            const cooldownUntil = dstate.cooldownUntil ? new Date(dstate.cooldownUntil) : null;
+            if (cooldownUntil && cooldownUntil.getTime() > Date.now()) {
+                await ctx.reply(
+                    `🔒 Đã chạm giới hạn ${dstate.dailyLossLimit} lệnh thua hôm nay. ` +
+                    `Trade: mở lại sau ${formatCooldownLeft(cooldownUntil)}.\n` +
+                    `Rời màn hình đi, thị trường mai vẫn còn. (Gõ Discipline Off nếu muốn tắt chế độ kỷ luật)`
+                );
+                return;
+            }
+            const pending: PendingTrade = { params, createdAt: Date.now(), checks: SAFETY_CHECKLIST.map(() => false) };
+            pendingTrades.set(userId, pending);
+            await ctx.reply(
+                `🛡 Chốt an toàn 15 giây\n` +
+                `${direction === 'long' ? '🟢' : '🔴'} ${direction.toUpperCase()} ${ticker} @ ${formatPrice(entry)}\n\n` +
+                `Hít thở. Tick đủ checklist và chờ 15 giây để mở chốt:`,
+                { reply_markup: safetyKeyboard(pending) }
+            );
+            return;
+        }
+
+        const trade = await tradeService.openTrade(userId, params);
         if (!trade) {
             await ctx.reply('⚠️ Không thể mở lệnh: giá không hợp lệ.');
             return;
         }
-        const dirEmoji = direction === 'long' ? '🟢' : '🔴';
-        const reversed =
-            (sl !== undefined && tp !== undefined) &&
-            (direction === 'long' ? !(tp > entry && sl < entry) : !(tp < entry && sl > entry));
-        await ctx.reply(
-            `${dirEmoji} Đã mở lệnh ${direction.toUpperCase()} ${trade.ticker}\n` +
-            `Entry: ${formatPrice(trade.entryPrice)}` +
-            (trade.stopLoss !== undefined ? `\nSL: ${formatPrice(trade.stopLoss)}` : '') +
-            (trade.takeProfit !== undefined ? `\nTP: ${formatPrice(trade.takeProfit)}` : '') +
-            (trade.positionSize !== undefined ? `\nSize: ${formatPrice(trade.positionSize)}` : '') +
-            (trade.riskPercent !== undefined ? `\nRisk: ${trade.riskPercent}%/tài khoản` : '') +
-            (trade.feePercent !== undefined ? `\nFee: ${trade.feePercent}%` : '') +
-            (trade.setupTag ? `\nSetup: #${trade.setupTag}` : '') +
-            (reversed ? '\n⚠️ SL/TP ngược chiều với hướng lệnh, sẽ không tính RR.' : '')
-        );
+        await ctx.reply(buildOpenReply(trade));
+        await sendOpenFollowups((t, o) => ctx.reply(t, o), trade);
         return;
     }
 
@@ -726,6 +877,35 @@ bot.on('message:text', async (ctx) => {
             (r !== null ? `\nR: ${r > 0 ? '+' : ''}${r}R` : '') +
             reasonLine
         );
+
+        // Discipline follow-ups: streak tracking + daily loss limit + process audit on losses.
+        const dstate = await disciplineService.getState(userId);
+        if (dstate.enabled) {
+            if (pnl < 0) {
+                const loss = await disciplineService.recordLoss(userId);
+                let msg = `📉 Lệnh thua thứ ${loss.lossStreak} liên tiếp` +
+                    ` (${loss.lossesToday}/${loss.dailyLossLimit} hôm nay).\n` +
+                    `Kỷ luật: giảm 50% rủi ro ở lệnh tiếp theo`;
+                if (closed.riskPercent !== undefined) {
+                    msg += ` (tối đa ${Math.round((closed.riskPercent / 2) * 100) / 100}%)`;
+                } else if (closed.positionSize !== undefined) {
+                    msg += ` (size tối đa ${formatPrice(closed.positionSize / 2)})`;
+                }
+                msg += '.';
+                if (loss.limitHit) {
+                    msg += `\n\n🛑 Đủ ${loss.dailyLossLimit} lệnh thua hôm nay. Trade: đã khoá tới hết ngày.\n` +
+                        `Rời màn hình đi, thị trường mai vẫn còn.`;
+                }
+                await ctx.reply(msg);
+                await ctx.reply(
+                    (closed.closeReason === 'sl' ? 'Bạn đã để SL làm đúng việc của nó. ' : '') +
+                    'Lệnh này bạn có tuân thủ đúng kế hoạch và mức cắt lỗ đã vạch ra không?',
+                    { reply_markup: auditKeyboard(closed.id) }
+                );
+            } else if (pnl > 0) {
+                await disciplineService.recordWin(userId);
+            }
+        }
 
         // Research-to-trade link (Premium): offer to link recent research on this ticker.
         if (await planService.canUse(userId, 'canLinkResearch')) {
@@ -791,6 +971,72 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
+    // --- DISCIPLINE & PSYCHOLOGY COMMANDS (Pro) ---
+
+    // Discipline / Discipline On / Discipline Off
+    const disciplineMatch = text.match(/^discipline(?:\s+(on|off))?$/i);
+    if (disciplineMatch) {
+        if (!await planService.canUse(userId, 'canTrade')) {
+            await ctx.reply('🔒 Discipline mode đi cùng Trade Journal (Pro). Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const toggle = disciplineMatch[1]?.toLowerCase();
+        if (toggle === 'on' || toggle === 'off') {
+            await disciplineService.setEnabled(userId, toggle === 'on');
+            await ctx.reply(toggle === 'on'
+                ? '🛡 Discipline mode BẬT. Mỗi lệnh Trade: sẽ qua chốt an toàn 15s + checklist.'
+                : '⚠️ Discipline mode TẮT. Trade: vào lệnh ngay, không qua chốt an toàn. Gõ Discipline On để bật lại.');
+            return;
+        }
+        const s = await disciplineService.getState(userId);
+        const cooldown = s.cooldownUntil ? new Date(s.cooldownUntil) : null;
+        const inCd = cooldown !== null && cooldown.getTime() > Date.now();
+        await ctx.reply(
+            '🛡 Discipline mode\n\n' +
+            `Trạng thái: ${s.enabled ? 'BẬT ✅' : 'TẮT ⚠️'}\n` +
+            `Chuỗi thua hiện tại: ${s.lossStreak}\n` +
+            `Thua hôm nay: ${s.lossesToday}/${s.dailyLossLimit}\n` +
+            (inCd ? `🔒 Đang khoá Trade: thêm ${formatCooldownLeft(cooldown!)}\n` : '') +
+            '\nLệnh: Discipline On · Discipline Off · Limit: 3 · Review'
+        );
+        return;
+    }
+
+    // Limit: 3 — set the daily losing-trade limit
+    const limitMatch = text.match(/^limit:\s*(\d{1,2})\s*$/i);
+    if (limitMatch) {
+        if (!await planService.canUse(userId, 'canTrade')) {
+            await ctx.reply('🔒 Discipline mode đi cùng Trade Journal (Pro). Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const limit = parseInt(limitMatch[1], 10);
+        if (limit < 1 || limit > 10) {
+            await ctx.reply('⚠️ Giới hạn hợp lệ: 1-10 lệnh thua/ngày. Ví dụ: Limit: 3');
+            return;
+        }
+        await disciplineService.setDailyLossLimit(userId, limit);
+        await ctx.reply(`✅ Đã đặt giới hạn ${limit} lệnh thua/ngày. Chạm giới hạn là Trade: khoá tới hết ngày.`);
+        return;
+    }
+
+    // Review / Audit — process-audit today's closed trades on demand
+    if (text.toLowerCase() === 'review' || text.toLowerCase() === 'audit') {
+        if (!await planService.canUse(userId, 'canTrade')) {
+            await ctx.reply('🔒 Trade Journal là tính năng Pro. Gõ /plan để nâng cấp!');
+            return;
+        }
+        const unaudited = (await tradeService.getUnauditedClosedToday(userId)).slice(0, 10);
+        if (unaudited.length === 0) {
+            await ctx.reply('🧭 Không có lệnh nào cần đối soát hôm nay. Mọi lệnh đóng hôm nay đã được review.');
+            return;
+        }
+        await ctx.reply(`🧭 Đối soát quy trình: ${unaudited.length} lệnh đóng hôm nay chưa review.`);
+        for (const t of unaudited) {
+            await ctx.reply(`${auditLabel(t)}\nLệnh này có đúng quy trình không?`, { reply_markup: auditKeyboard(t.id) });
+        }
+        return;
+    }
+
     // Trade Stats
     if (text.toLowerCase() === 'trade stats') {
         if (!await planService.canUse(userId, 'canTrade')) {
@@ -814,6 +1060,12 @@ bot.on('message:text', async (ctx) => {
         }
         if (s.best) msg += `\nBest: ${s.best.ticker} ${fmtPct(s.best.pnlPercent ?? 0)}`;
         if (s.worst) msg += `\nWorst: ${s.worst.ticker} ${fmtPct(s.worst.pnlPercent ?? 0)}`;
+        if (s.auditedCount > 0) {
+            msg += `\n\n🧭 Kỷ luật (${s.auditedCount} lệnh đã đối soát)\n` +
+                `Đúng quy trình: ${s.disciplineRate}%\n` +
+                `PnL kỷ luật: ${fmtPct(s.disciplinedPnl)}` +
+                (s.luckyPnl > 0 ? ` (đã loại ${fmtPct(s.luckyPnl)} thắng ăn may)` : '');
+        }
         await ctx.reply(msg);
         return;
     }
@@ -857,6 +1109,14 @@ bot.on('message:text', async (ctx) => {
             const e = m.totalPnl > 0 ? '✅' : '❌';
             msg += `${e} ${m.month}: ${m.trades} lệnh · win ${m.winRate}% · ${fmtPct(m.totalPnl)}\n`;
         });
+
+        if (a.byEmotion && a.byEmotion.length > 0) {
+            msg += '\n🧠 Theo cảm xúc lúc vào lệnh:\n';
+            a.byEmotion.forEach((b) => {
+                const label = b.label === 'calm' ? '😌 Bình tĩnh (emo ≤5)' : '😰 Căng thẳng (emo ≥7)';
+                msg += `${label}: ${b.trades} lệnh · win ${b.winRate}% · avg ${fmtPct(b.avgPnl)}\n`;
+            });
+        }
 
         await ctx.reply(msg);
 
@@ -1383,6 +1643,44 @@ cron.schedule('* * * * *', async () => {
     timezone: 'Asia/Ho_Chi_Minh',
 });
 
+// --- EOD PROCESS-AUDIT CRON ("perfect trader" ledger, 21:00 daily) ---
+cron.schedule('0 21 * * *', async () => {
+    console.log('[Audit] Running EOD process-audit cron...');
+    try {
+        const userIds = await tradeService.getAllUserIds();
+        for (const userId of userIds) {
+            try {
+                if (!await planService.canUse(userId, 'canTrade')) continue;
+                const dstate = await disciplineService.getState(userId);
+                if (!dstate.enabled) continue;
+                const unaudited = (await tradeService.getUnauditedClosedToday(userId)).slice(0, 5);
+                if (unaudited.length === 0) continue;
+
+                await bot.api.sendMessage(
+                    userId,
+                    `🧭 Đối soát cuối ngày: ${unaudited.length} lệnh đóng hôm nay chưa review.\n` +
+                    'Đánh giá theo QUY TRÌNH, không theo kết quả:'
+                );
+                for (const t of unaudited) {
+                    await bot.api.sendMessage(
+                        userId,
+                        `${auditLabel(t)}\nLệnh này có đúng quy trình không?`,
+                        { reply_markup: auditKeyboard(t.id) }
+                    );
+                    await new Promise((r) => setTimeout(r, 150)); // Telegram rate-limit cushion
+                }
+            } catch (e) {
+                console.error(`[Audit] Error for user ${userId}:`, e);
+            }
+        }
+    } catch (e) {
+        console.error('[Audit] cron error:', e);
+    }
+    console.log('[Audit] EOD process-audit cron completed.');
+}, {
+    timezone: 'Asia/Ho_Chi_Minh',
+});
+
 // --- /upgrade command ---
 bot.command('upgrade', async (ctx) => {
     const userId = ctx.from?.id;
@@ -1523,6 +1821,151 @@ bot.callbackQuery(/^alertdel:(.+)$/, async (ctx) => {
         ).row();
     });
     await ctx.editMessageText(`🔔 Alerts đang chạy (${active.length}). Bấm để xoá:`, { reply_markup: keyboard });
+});
+
+// --- DISCIPLINE CALLBACKS ---
+
+// Fetch the caller's pending trade if it's still fresh; expired entries are cleaned up.
+function getFreshPending(userId: number): PendingTrade | null {
+    const pending = pendingTrades.get(userId);
+    if (!pending) return null;
+    if (Date.now() - pending.createdAt > PENDING_TTL_MS) {
+        pendingTrades.delete(userId);
+        return null;
+    }
+    return pending;
+}
+
+// Safety-gate checklist toggle
+bot.callbackQuery(/^dchk:(\d)$/, async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) {
+        await ctx.answerCallbackQuery();
+        return;
+    }
+    const pending = getFreshPending(userId);
+    if (!pending) {
+        await ctx.answerCallbackQuery({ text: '⌛ Phiên đã hết hạn. Gõ lại Trade: để mở lệnh.', show_alert: true });
+        await ctx.editMessageText('⌛ Chốt an toàn đã hết hạn. Gõ lại Trade: nếu vẫn muốn vào lệnh.');
+        return;
+    }
+    const idx = parseInt(ctx.match![1], 10);
+    if (idx >= 0 && idx < pending.checks.length) {
+        pending.checks[idx] = !pending.checks[idx];
+    }
+    await ctx.answerCallbackQuery();
+    try {
+        await ctx.editMessageReplyMarkup({ reply_markup: safetyKeyboard(pending) });
+    } catch {
+        // "message is not modified" when toggling fast — safe to ignore.
+    }
+});
+
+// Safety-gate unlock: requires all checks + the 15s delay elapsed.
+bot.callbackQuery('dgo', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) {
+        await ctx.answerCallbackQuery();
+        return;
+    }
+    const pending = getFreshPending(userId);
+    if (!pending) {
+        await ctx.answerCallbackQuery({ text: '⌛ Phiên đã hết hạn. Gõ lại Trade: để mở lệnh.', show_alert: true });
+        await ctx.editMessageText('⌛ Chốt an toàn đã hết hạn. Gõ lại Trade: nếu vẫn muốn vào lệnh.');
+        return;
+    }
+    if (!pending.checks.every(Boolean)) {
+        await ctx.answerCallbackQuery({ text: '⚠️ Tick đủ 3 mục checklist trước đã.', show_alert: true });
+        return;
+    }
+    const waitLeft = Math.ceil((SAFETY_DELAY_MS - (Date.now() - pending.createdAt)) / 1000);
+    if (waitLeft > 0) {
+        await ctx.answerCallbackQuery({ text: `⏳ Còn ${waitLeft}s. Hít thở sâu đã.` });
+        try {
+            await ctx.editMessageReplyMarkup({ reply_markup: safetyKeyboard(pending) });
+        } catch {
+            // unchanged countdown label — ignore
+        }
+        return;
+    }
+    pendingTrades.delete(userId);
+    const trade = await tradeService.openTrade(userId, pending.params);
+    if (!trade) {
+        await ctx.answerCallbackQuery({ text: '⚠️ Không thể mở lệnh.', show_alert: true });
+        await ctx.editMessageText('⚠️ Không thể mở lệnh: giá không hợp lệ. Gõ lại Trade: để thử lại.');
+        return;
+    }
+    await ctx.answerCallbackQuery({ text: '🔓 Đã mở chốt!' });
+    await ctx.editMessageText('🛡 Checklist hoàn tất sau 15s — kỷ luật tốt.\n\n' + buildOpenReply(trade));
+    await sendOpenFollowups((t, o) => ctx.reply(t, o), trade);
+});
+
+bot.callbackQuery('dcancel', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId) pendingTrades.delete(userId);
+    await ctx.answerCallbackQuery({ text: 'Đã huỷ' });
+    await ctx.editMessageText('✖️ Đã huỷ lệnh. Không vào được lệnh xấu cũng là một chiến thắng.');
+});
+
+// Emotion score buttons (after opening a trade)
+bot.callbackQuery(/^emo:([^:]+):(\d{1,2})$/, async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) {
+        await ctx.answerCallbackQuery();
+        return;
+    }
+    const tradeId = ctx.match![1];
+    const score = parseInt(ctx.match![2], 10);
+    const trade = await tradeService.setEmotion(userId, tradeId, { score });
+    if (!trade) {
+        await ctx.answerCallbackQuery({ text: '⚠️ Không tìm thấy lệnh', show_alert: true });
+        return;
+    }
+    await ctx.answerCallbackQuery({ text: `Đã ghi ${score}/10` });
+    await ctx.editMessageText(`🧠 Cảm xúc lúc vào lệnh ${trade.ticker}: ${score}/10.`);
+    const warn = emotionWarning(score, trade.heartRate);
+    if (warn) await ctx.reply(warn);
+});
+
+bot.callbackQuery(/^emoskip:.+$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText('👍 Đã bỏ qua chấm điểm cảm xúc.');
+});
+
+// Process-audit buttons ("perfect trader" ledger + compassionate post-loss voice)
+bot.callbackQuery(/^audit:([^:]+):(0|1)$/, async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) {
+        await ctx.answerCallbackQuery();
+        return;
+    }
+    const tradeId = ctx.match![1];
+    const ok = ctx.match![2] === '1';
+    const trade = await tradeService.setDisciplined(userId, tradeId, ok);
+    if (!trade) {
+        await ctx.answerCallbackQuery({ text: '⚠️ Không tìm thấy lệnh', show_alert: true });
+        return;
+    }
+    await ctx.answerCallbackQuery({ text: ok ? '✅ Đúng quy trình' : '❌ Đã ghi nhận vi phạm' });
+    const pnl = trade.pnlPercent ?? 0;
+    const isWin = pnl > 0;
+    let msg: string;
+    if (ok && !isWin) {
+        msg = `🙏 ${auditLabel(trade)}\n` +
+            'Bạn đã làm đúng quy trình. Lỗ này là chi phí kinh doanh, không phải thất bại.\n' +
+            'Tha thứ cho bản thân và bước tiếp. Sự sáng tỏ quan trọng hơn một lệnh thua.';
+    } else if (ok && isWin) {
+        msg = `✅ ${auditLabel(trade)}\n` +
+            'Thắng đúng quy trình — đây mới là lợi nhuận bền vững. Giữ vững phong độ.';
+    } else if (!ok && isWin) {
+        msg = `⚖️ ${auditLabel(trade)}\n` +
+            `Đã loại ${fmtPct(pnl)} khỏi PnL kỷ luật. Lợi nhuận may mắn là khoản thị trường sẽ đòi lại.\n` +
+            'Giữ cái tôi khiêm tốn — quy trình mới là thứ kiếm tiền dài hạn.';
+    } else {
+        msg = `📝 ${auditLabel(trade)}\n` +
+            'Ghi nhận để học, không phải để tự trách. Lệnh sau quay lại đúng kế hoạch là đủ.';
+    }
+    await ctx.editMessageText(msg);
 });
 
 // Slash commands shown in Telegram's command menu.

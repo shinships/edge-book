@@ -50,12 +50,13 @@ edge-book/
 │   ├── webhook.server.ts       # Express HTTP server for LemonSqueezy payment webhooks
 │   ├── db/
 │   │   ├── index.ts            # postgres client + drizzle instance (exits if DATABASE_URL missing)
-│   │   └── schema.ts           # Drizzle schema: users, plans, research_items, trades, theses, alerts, watchlist_items, todos
+│   │   └── schema.ts           # Drizzle schema: users, plans, research_items, trades, theses, alerts, watchlist_items, discipline_state, todos
 │   ├── scripts/
 │   │   └── migrate-json-to-db.ts # One-time seed: legacy data/*.json → Postgres (`npm run db:seed`)
 │   ├── services/
 │   │   ├── ai.service.ts       # AI chat, calendar analysis, digest generation, research Q&A
 │   │   ├── alert.service.ts    # Price alerts CRUD (active/triggered) — checked by per-minute cron
+│   │   ├── discipline.service.ts # Discipline mode: loss streak, daily loss limit, cooldown (Sprint 9)
 │   │   ├── google.service.ts   # Calendar, Drive, Docs API wrappers
 │   │   ├── market.service.ts   # Binance public API: batch prices + 24h stats, 45s cache, never throws
 │   │   ├── payment.service.ts  # LemonSqueezy checkout creation, HMAC verify, upgrade logic
@@ -174,10 +175,15 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
    - `Watchlist` — live price + 24h change per ticker (Binance via `MarketService`)
    - `Alert: <ticker> > <price>` / `Alert: <ticker> < <price>` — price alert (Pro: max 10 active, Premium: unlimited; `k` suffix supported)
    - `Alerts` / `My Alerts` — list active alerts with inline delete buttons (callback `alertdel:<id>`)
-6. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
-7. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
-8. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc. For Premium users, also runs `ThesisService.findConflicts()` and sends a conflict alert if the new item contradicts an active thesis.
-9. **Default**: Falls through to AI chat with per-user session
+6. **Discipline & Psychology commands** (Sprint 9, Pro — đi cùng `canTrade`):
+   - **15s safety gate** (mặc định BẬT): `Trade:` không mở lệnh ngay — bot stash params vào `pendingTrades` Map (in-memory) và gửi checklist 3 câu (callback `dchk:<i>`) + nút Vào lệnh (`dgo`, chỉ pass khi tick đủ 3 + đã qua 15s; TTL 10 phút) + Huỷ (`dcancel`)
+   - `Trade:` nhận thêm token `emo <1-10>` (emotion score) và `hr <bpm>` (heart rate); thiếu `emo` → bot gửi keyboard 1-10 sau khi mở lệnh (callback `emo:<tradeId>:<n>` / `emoskip:`); `emo ≥ 8` hoặc `hr ≥ 110` → cảnh báo cortisol/adrenaline, khuyên rời màn hình
+   - `Close:` lệnh lỗ → streak +1, nhắc giảm 50% risk (tính sẵn con số từ `riskPercent`/`positionSize`); đủ `dailyLossLimit` lệnh thua/ngày (mặc định 3) → khoá `Trade:` tới hết ngày VN; đồng thời hỏi "có tuân thủ kế hoạch không?" (callback `audit:<tradeId>:<1|0>`) → phản hồi vị tha nếu Có, không phán xét nếu Không
+   - `Discipline` (status) / `Discipline On` / `Discipline Off` · `Limit: <1-10>` (giới hạn thua/ngày) · `Review`/`Audit` (đối soát chủ động các lệnh đóng hôm nay)
+7. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
+8. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
+9. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc. For Premium users, also runs `ThesisService.findConflicts()` and sends a conflict alert if the new item contradicts an active thesis.
+10. **Default**: Falls through to AI chat with per-user session
 
 ### Photo Handler
 
@@ -200,6 +206,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 - **AlertService** *(new, Sprint 8)*: Persists to Postgres (`alerts`). Price alert CRUD — `addAlert` (above/below + target), `getActiveAlerts`, `getAllActive` (for the cron), `deleteAlert`, `markTriggered`. Gated by `PlanLimits.maxActiveAlerts`.
 - **WatchlistService** *(new, Sprint 8)*: Persists to Postgres (`watchlist_items`, unique index user+ticker). `add` (onConflictDoNothing → 'added'|'exists'), `remove`, `getWatchlist`. Gated by `PlanLimits.maxWatchlist`.
 - **MarketService** *(new, Sprint 8)*: **No DB** — live crypto prices from Binance public REST API (no key). `getPrices()` (batch, used by per-minute alert cron) and `get24hStats()` (Watchlist). Maps ticker → `<BASE>USDT` symbol, 45s in-memory cache with negative-caching, 8s timeout, batch endpoint with per-symbol fallback. Best-effort: never throws, returns partial/empty maps on failure.
+- **DisciplineService** *(new, Sprint 9)*: Persists to Postgres (`discipline_state`, 1 row/user, auto-created with defaults: enabled, limit 3). Tracks loss streak (`recordLoss`/`recordWin`), daily loss counter (VN-timezone date string, lazy reset on read), `dailyLossLimit`, and `cooldownUntil` (set to end of VN day when the limit is hit). The 15s safety gate itself is in-memory in `index.ts` (`pendingTrades` Map), not in this service. Trade journal psychology fields (`emotionScore`, `heartRate`, `disciplined`) live on `trades` and are managed by `TradeService.setEmotion`/`setDisciplined`; `getStats()` exposes `disciplinedPnl` (PnL minus undisciplined "lucky" wins), `disciplineRate`, and `getAnalytics()` adds `byEmotion` (calm ≤5 vs stressed ≥7, requires ≥3 scored trades).
 - **ReportService** *(new)*: Generates a trade performance **PDF** with `pdfkit` (in-memory `Buffer`, sent via grammY `InputFile`). Renders a header banner, summary, a drawn monthly-PnL bar chart, by-ticker/by-direction tables, and a closed-trade log with multi-page support (`bufferPages: true` for the footer pass). PDF text is **ASCII/English** — pdfkit's built-in fonts can't render Vietnamese diacritics, so `index.ts` runs the trader name through a `toAscii()` helper. Premium-gated via `canExport`.
 
 ### Subscription Tiers
@@ -236,9 +243,11 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 
 **Price Alert Checker** — a `node-cron` job runs **every minute** (`* * * * *`): loads all active alerts (`AlertService.getAllActive()`), batch-fetches prices via `MarketService.getPrices()`, marks hit alerts as triggered, and DMs the owner. Guarded by an in-flight flag (`alertCronBusy`) so overlapping runs are skipped.
 
+**EOD Process Audit** — a `node-cron` job runs at **21:00 daily (Asia/Ho_Chi_Minh)**: for each user with trades (`TradeService.getAllUserIds()`) who is Pro+ and has discipline mode enabled, sends up to 5 unaudited trades closed today (`getUnauditedClosedToday()`) with ✅/❌ process-audit buttons (callback `audit:<tradeId>:<1|0>`) — the "perfect trader" ledger.
+
 ### Data Persistence
 
-All data lives in **PostgreSQL (Supabase)** via **Drizzle ORM** — schema in `src/db/schema.ts` (8 tables: `users`, `plans`, `research_items`, `trades`, `theses`, `alerts`, `watchlist_items`, `todos`), connection in `src/db/index.ts` (`postgres` driver + `DATABASE_URL`). All service methods are **async**.
+All data lives in **PostgreSQL (Supabase)** via **Drizzle ORM** — schema in `src/db/schema.ts` (9 tables: `users`, `plans`, `research_items`, `trades`, `theses`, `alerts`, `watchlist_items`, `discipline_state`, `todos`), connection in `src/db/index.ts` (`postgres` driver + `DATABASE_URL`). All service methods are **async**.
 
 - Legacy JSON files in `data/` are no longer read at runtime — they were the pre-Sprint-7 store and remain only as the seed source for `npm run db:seed` (`src/scripts/migrate-json-to-db.ts`).
 - DB migration removed the old "single instance for data safety" constraint; the remaining single-instance limit is Telegram long-polling (one `getUpdates` consumer, see Windows Service section).

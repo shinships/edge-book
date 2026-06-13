@@ -22,6 +22,9 @@ export interface TradeItem {
     feePercent?: number;
     closeReason?: 'tp' | 'sl' | 'manual';
     setupTag?: string;
+    emotionScore?: number;
+    heartRate?: number;
+    disciplined?: boolean;
     openedAt: string;
     closedAt?: string;
 }
@@ -40,6 +43,12 @@ export interface TradeStats {
     rTradeCount: number;
     best?: TradeItem;
     worst?: TradeItem;
+    // Process audit ("perfect trader" ledger): wins flagged as undisciplined are
+    // treated as luck and excluded from the disciplined PnL.
+    auditedCount: number;
+    disciplineRate: number | null;   // % of audited trades that followed the plan
+    disciplinedPnl: number;          // totalPnl minus undisciplined wins
+    luckyPnl: number;                // sum of PnL excluded as lucky wins
 }
 
 export interface TickerPerf {
@@ -67,6 +76,13 @@ export interface MonthPerf {
     winRate: number;
 }
 
+export interface EmotionPerf {
+    label: 'calm' | 'stressed';
+    trades: number;
+    winRate: number;
+    avgPnl: number;
+}
+
 export interface TradeAnalytics {
     closedCount: number;
     byTicker: TickerPerf[];
@@ -75,6 +91,8 @@ export interface TradeAnalytics {
     avgHoldHours: number | null;
     bestTicker?: TickerPerf;
     worstTicker?: TickerPerf;
+    // Emotion ↔ performance correlation; present only with >= 3 emotion-scored closed trades.
+    byEmotion?: EmotionPerf[];
 }
 
 type TradeRow = typeof trades.$inferSelect;
@@ -98,6 +116,9 @@ function toItem(row: TradeRow): TradeItem {
         feePercent: row.feePercent ?? undefined,
         closeReason: (row.closeReason as 'tp' | 'sl' | 'manual') ?? undefined,
         setupTag: row.setupTag ?? undefined,
+        emotionScore: row.emotionScore ?? undefined,
+        heartRate: row.heartRate ?? undefined,
+        disciplined: row.disciplined ?? undefined,
         openedAt: row.openedAt.toISOString(),
         closedAt: row.closedAt?.toISOString(),
     };
@@ -108,6 +129,12 @@ function toItem(row: TradeRow): TradeItem {
 export class TradeService {
     private generateId(): string {
         return `t_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    }
+
+    // Distinct user ids that have at least one trade (for the audit cron).
+    async getAllUserIds(): Promise<number[]> {
+        const rows = await db.selectDistinct({ userId: trades.userId }).from(trades);
+        return rows.map((r) => r.userId);
     }
 
     async getTrades(userId: number): Promise<TradeItem[]> {
@@ -170,6 +197,8 @@ export class TradeService {
             riskPercent?: number;
             feePercent?: number;
             setupTag?: string;
+            emotionScore?: number;
+            heartRate?: number;
         }
     ): Promise<TradeItem | null> {
         if (!Number.isFinite(data.entryPrice) || data.entryPrice <= 0) return null;
@@ -178,6 +207,8 @@ export class TradeService {
         if (data.positionSize !== undefined && (!Number.isFinite(data.positionSize) || data.positionSize <= 0)) return null;
         if (data.riskPercent !== undefined && (!Number.isFinite(data.riskPercent) || data.riskPercent <= 0 || data.riskPercent > 100)) return null;
         if (data.feePercent !== undefined && (!Number.isFinite(data.feePercent) || data.feePercent < 0 || data.feePercent >= 100)) return null;
+        if (data.emotionScore !== undefined && (!Number.isInteger(data.emotionScore) || data.emotionScore < 1 || data.emotionScore > 10)) return null;
+        if (data.heartRate !== undefined && (!Number.isInteger(data.heartRate) || data.heartRate < 30 || data.heartRate > 250)) return null;
 
         const setupTag = data.setupTag?.trim().toLowerCase().slice(0, 24) || undefined;
 
@@ -196,9 +227,46 @@ export class TradeService {
             riskPercent: data.riskPercent,
             feePercent: data.feePercent,
             setupTag,
+            emotionScore: data.emotionScore,
+            heartRate: data.heartRate,
             openedAt: new Date(),
         }).returning();
         return toItem(row!);
+    }
+
+    async setEmotion(
+        userId: number,
+        tradeId: string,
+        emotion: { score?: number; heartRate?: number }
+    ): Promise<TradeItem | null> {
+        if (emotion.score !== undefined && (!Number.isInteger(emotion.score) || emotion.score < 1 || emotion.score > 10)) return null;
+        if (emotion.heartRate !== undefined && (!Number.isInteger(emotion.heartRate) || emotion.heartRate < 30 || emotion.heartRate > 250)) return null;
+        const [updated] = await db.update(trades)
+            .set({
+                ...(emotion.score !== undefined ? { emotionScore: emotion.score } : {}),
+                ...(emotion.heartRate !== undefined ? { heartRate: emotion.heartRate } : {}),
+            })
+            .where(and(eq(trades.id, tradeId), eq(trades.userId, userId)))
+            .returning();
+        return updated ? toItem(updated) : null;
+    }
+
+    async setDisciplined(userId: number, tradeId: string, disciplined: boolean): Promise<TradeItem | null> {
+        const [updated] = await db.update(trades)
+            .set({ disciplined })
+            .where(and(eq(trades.id, tradeId), eq(trades.userId, userId)))
+            .returning();
+        return updated ? toItem(updated) : null;
+    }
+
+    // Closed trades from the current VN day that haven't been process-audited yet.
+    async getUnauditedClosedToday(userId: number): Promise<TradeItem[]> {
+        const todayVN = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+        return (await this.getClosedTrades(userId)).filter((t) =>
+            t.disciplined === undefined &&
+            t.closedAt !== undefined &&
+            new Date(t.closedAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }) === todayVN
+        );
     }
 
     async closeTrade(
@@ -323,6 +391,15 @@ export class TradeService {
             if (worst === undefined || (t.pnlPercent ?? 0) < (worst.pnlPercent ?? 0)) worst = t;
         }
 
+        const audited = closed.filter((t) => t.disciplined !== undefined);
+        const luckyWins = closed.filter((t) => t.disciplined === false && (t.pnlPercent ?? 0) > 0);
+        const luckyPnl =
+            Math.round(luckyWins.reduce((sum, t) => sum + (t.pnlPercent ?? 0), 0) * 100) / 100;
+        const disciplineRate =
+            audited.length > 0
+                ? Math.round((audited.filter((t) => t.disciplined === true).length / audited.length) * 1000) / 10
+                : null;
+
         return {
             total: all.length,
             open: all.length - closed.length,
@@ -337,6 +414,10 @@ export class TradeService {
             rTradeCount: rValues.length,
             best,
             worst,
+            auditedCount: audited.length,
+            disciplineRate,
+            disciplinedPnl: Math.round((totalPnl - luckyPnl) * 100) / 100,
+            luckyPnl,
         };
     }
 
@@ -444,6 +525,27 @@ export class TradeService {
                 ? round2(holdHours.reduce((a, b) => a + b, 0) / holdHours.length)
                 : null;
 
+        // Emotion ↔ performance: calm (score <= 5) vs stressed (score >= 7).
+        const scored = closed.filter((t) => t.emotionScore !== undefined);
+        let byEmotion: EmotionPerf[] | undefined;
+        if (scored.length >= 3) {
+            const bucket = (label: 'calm' | 'stressed', items: TradeItem[]): EmotionPerf => {
+                const wins = items.filter((t) => (t.pnlPercent ?? 0) > 0).length;
+                const totalPnl = items.reduce((s, t) => s + (t.pnlPercent ?? 0), 0);
+                return {
+                    label,
+                    trades: items.length,
+                    winRate: winRate(wins, items.length),
+                    avgPnl: items.length > 0 ? round2(totalPnl / items.length) : 0,
+                };
+            };
+            byEmotion = [
+                bucket('calm', scored.filter((t) => t.emotionScore! <= 5)),
+                bucket('stressed', scored.filter((t) => t.emotionScore! >= 7)),
+            ].filter((b) => b.trades > 0);
+            if (byEmotion.length === 0) byEmotion = undefined;
+        }
+
         return {
             closedCount: closed.length,
             byTicker,
@@ -452,6 +554,7 @@ export class TradeService {
             avgHoldHours,
             bestTicker: byTicker[0],
             worstTicker: byTicker.length > 0 ? byTicker[byTicker.length - 1] : undefined,
+            byEmotion,
         };
     }
 }
