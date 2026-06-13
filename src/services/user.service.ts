@@ -12,6 +12,10 @@ export interface UserProfile {
     // Multi-Docs Support
     activeDocId?: string;
     docAliases?: Record<string, string>;
+
+    // Growth / attribution
+    acquisitionSource?: string;
+    createdAt?: string;
 }
 
 type UserRow = typeof users.$inferSelect;
@@ -25,15 +29,21 @@ function toProfile(row: UserRow): UserProfile {
         notes: row.notes ?? [],
         activeDocId: row.activeDocId ?? undefined,
         docAliases: (row.docAliases as Record<string, string>) ?? {},
+        acquisitionSource: row.acquisitionSource ?? undefined,
+        createdAt: row.createdAt?.toISOString() ?? undefined,
     };
 }
 
 export class UserService {
-    async getUser(id: number): Promise<UserProfile> {
+    // acquisitionSource/createdAt are only recorded on first insert (first-touch attribution);
+    // onConflictDoNothing means they're ignored for existing users.
+    async getUser(id: number, acquisitionSource?: string): Promise<UserProfile> {
         await db.insert(users).values({
             id,
             notes: [],
             docAliases: {},
+            acquisitionSource: acquisitionSource ?? null,
+            createdAt: new Date(),
         }).onConflictDoNothing();
         const [row] = await db.select().from(users).where(eq(users.id, id));
         return toProfile(row!);

@@ -8,6 +8,8 @@ export const users = pgTable('users', {
     notes: text('notes').array().notNull(),
     activeDocId: text('active_doc_id'),
     docAliases: jsonb('doc_aliases').$type<Record<string, string>>().notNull(),
+    acquisitionSource: text('acquisition_source'),
+    createdAt: timestamp('created_at', { withTimezone: true }),
 });
 
 export const plans = pgTable('plans', {

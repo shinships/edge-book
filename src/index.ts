@@ -15,6 +15,7 @@ import { MarketService } from './services/market.service';
 import { AlertService } from './services/alert.service';
 import { WatchlistService } from './services/watchlist.service';
 import { DisciplineService } from './services/discipline.service';
+import { GrowthService } from './services/growth.service';
 import { TradeItem } from './services/trade.service';
 import { startWebhookServer } from './webhook.server';
 import cron from 'node-cron';
@@ -35,6 +36,7 @@ const marketService = new MarketService();
 const alertService = new AlertService();
 const watchlistService = new WatchlistService();
 const disciplineService = new DisciplineService();
+const growthService = new GrowthService();
 
 // Parse a positive price string that may use a "k" suffix (e.g. "108k" -> 108000).
 // Returns undefined for malformed input (e.g. "1.2.3", ".", "0", negatives).
@@ -303,20 +305,39 @@ function getForwardSource(message: any): string | undefined {
     }
 }
 
+// Deep-link acquisition source: t.me/<bot>?start=src_<channel> or ?start=ref_<userId>.
+// Returns a normalized source label, or undefined for plain /start (organic).
+function parseAcquisitionSource(payload?: string): string | undefined {
+    if (!payload) return undefined;
+    if (payload.startsWith('src_')) {
+        const source = payload.slice(4).toLowerCase();
+        return source || undefined;
+    }
+    if (payload.startsWith('ref_')) return 'referral';
+    return undefined;
+}
+
 // Basic Command Handlers
-bot.command('start', (ctx) => ctx.reply(
-    '👋 EdgeBook · capture your edge.\n' +
-    'Research OS cho trader, sống ngay trong Telegram.\n' +
-    '\n' +
-    '✨ Nổi bật:\n' +
-    '📥 Forward tin → tự gắn tag ticker, chấm sentiment & lưu Docs\n' +
-    '📊 Daily Digest + Weekly Report tổng hợp research bằng AI\n' +
-    '🔍 Search & Ask: hỏi AI ngay trên kho research của bạn\n' +
-    '📈 Trade Journal: log lệnh, tính PnL, win rate, analytics\n' +
-    '🧠 Thesis tracker: cảnh báo khi tin mới mâu thuẫn luận điểm\n' +
-    '\n' +
-    'Gõ /help để xem tất cả lệnh.'
-));
+bot.command('start', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId) {
+        const source = parseAcquisitionSource(ctx.match);
+        await userService.getUser(userId, source);
+    }
+    return ctx.reply(
+        '👋 EdgeBook · capture your edge.\n' +
+        'Research OS cho trader, sống ngay trong Telegram.\n' +
+        '\n' +
+        '✨ Nổi bật:\n' +
+        '📥 Forward tin → tự gắn tag ticker, chấm sentiment & lưu Docs\n' +
+        '📊 Daily Digest + Weekly Report tổng hợp research bằng AI\n' +
+        '🔍 Search & Ask: hỏi AI ngay trên kho research của bạn\n' +
+        '📈 Trade Journal: log lệnh, tính PnL, win rate, analytics\n' +
+        '🧠 Thesis tracker: cảnh báo khi tin mới mâu thuẫn luận điểm\n' +
+        '\n' +
+        'Gõ /help để xem tất cả lệnh.'
+    );
+});
 
 bot.command('help', (ctx) => {
     ctx.reply(
@@ -1681,6 +1702,15 @@ cron.schedule('0 21 * * *', async () => {
     console.log('[Audit] EOD process-audit cron completed.');
 }, {
     timezone: 'Asia/Ho_Chi_Minh',
+});
+
+// --- /growth command (admin-only growth dashboard) ---
+bot.command('growth', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId || !planService.isAdmin(userId)) return;
+
+    const report = await growthService.getReport();
+    await ctx.reply(report);
 });
 
 // --- /upgrade command ---
