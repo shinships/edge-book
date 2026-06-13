@@ -16,6 +16,7 @@ import { AlertService } from './services/alert.service';
 import { WatchlistService } from './services/watchlist.service';
 import { DisciplineService } from './services/discipline.service';
 import { GrowthService } from './services/growth.service';
+import { ReferralService } from './services/referral.service';
 import { TradeItem } from './services/trade.service';
 import { startWebhookServer } from './webhook.server';
 import cron from 'node-cron';
@@ -37,6 +38,7 @@ const alertService = new AlertService();
 const watchlistService = new WatchlistService();
 const disciplineService = new DisciplineService();
 const growthService = new GrowthService();
+const referralService = new ReferralService();
 
 // Parse a positive price string that may use a "k" suffix (e.g. "108k" -> 108000).
 // Returns undefined for malformed input (e.g. "1.2.3", ".", "0", negatives).
@@ -317,12 +319,60 @@ function parseAcquisitionSource(payload?: string): string | undefined {
     return undefined;
 }
 
+// Reward both sides of a referral (+7 days Pro) once the referee reaches
+// activation (their first-ever research item). Milestones at 3/10 successful
+// referrals grant the referrer extra bonus days. Best-effort: a reward hiccup
+// never blocks the Save flow.
+async function maybeRewardReferral(userId: number): Promise<void> {
+    try {
+        if (!(await referralService.hasPending(userId))) return;
+
+        const items = await researchService.getItems(userId);
+        if (items.length !== 1) return; // only the very first save counts
+
+        const result = await referralService.reward(userId);
+        if (!result) return;
+
+        await planService.grantBonusDays(userId, 7);
+        await planService.grantBonusDays(result.referrerId, 7);
+
+        await bot.api.sendMessage(userId,
+            '🎁 Bạn vừa lưu research đầu tiên! +7 ngày Pro đã được cộng vào tài khoản. Cảm ơn đã tham gia EdgeBook.'
+        ).catch(() => {});
+        await bot.api.sendMessage(result.referrerId,
+            `🎉 Người bạn mời đã hoạt động! Bạn nhận +7 ngày Pro. Đã mời thành công: ${result.referrerRewardedCount} người.`
+        ).catch(() => {});
+
+        if (result.referrerRewardedCount === 3) {
+            await planService.grantBonusDays(result.referrerId, 30, 'pro');
+            await bot.api.sendMessage(result.referrerId,
+                '🏆 Mốc 3 lượt mời thành công! Bạn nhận thêm +30 ngày Pro.'
+            ).catch(() => {});
+        } else if (result.referrerRewardedCount === 10) {
+            await planService.grantBonusDays(result.referrerId, 30, 'premium');
+            await bot.api.sendMessage(result.referrerId,
+                '👑 Mốc 10 lượt mời thành công! Bạn được nâng cấp +30 ngày Premium.'
+            ).catch(() => {});
+        }
+    } catch (e) {
+        console.error('Referral reward error:', e);
+    }
+}
+
 // Basic Command Handlers
 bot.command('start', async (ctx) => {
     const userId = ctx.from?.id;
     if (userId) {
-        const source = parseAcquisitionSource(ctx.match);
-        await userService.getUser(userId, source);
+        const payload = ctx.match;
+        const source = parseAcquisitionSource(payload);
+        const { isNew } = await userService.createIfNew(userId, source);
+
+        if (isNew && payload?.startsWith('ref_')) {
+            const referrerId = Number(payload.slice(4));
+            if (Number.isInteger(referrerId) && referrerId !== userId) {
+                await referralService.record(referrerId, userId);
+            }
+        }
     }
     return ctx.reply(
         '👋 EdgeBook · capture your edge.\n' +
@@ -384,7 +434,8 @@ bot.command('help', (ctx) => {
         '• Alerts → xem & xoá alerts đang chạy\n' +
         '\n' +
         '💳 Tài khoản\n' +
-        '• /plan · /upgrade'
+        '• /plan · /upgrade\n' +
+        '• /invite → mời bạn, cả hai nhận +7 ngày Pro khi bạn ấy lưu research đầu tiên'
     );
 });
 
@@ -1421,6 +1472,7 @@ bot.on('message:text', async (ctx) => {
         const forwardFrom = getForwardSource(ctx.message);
         const researchItem = await researchService.addItem(userId, content, forwardFrom);
         await planService.incrementForwardCount(userId);
+        await maybeRewardReferral(userId);
 
         // --- Thesis conflict detection (Premium) ---
         let thesisAlert = '';
@@ -1544,6 +1596,7 @@ bot.on('message:photo', async (ctx) => {
                     if (cleanCaption) {
                         const forwardFrom = getForwardSource(ctx.message);
                         await researchService.addItem(userId, `[Image] ${cleanCaption}`, forwardFrom);
+                        await maybeRewardReferral(userId);
                     }
                     await planService.incrementForwardCount(userId);
 
@@ -1702,6 +1755,28 @@ cron.schedule('0 21 * * *', async () => {
     console.log('[Audit] EOD process-audit cron completed.');
 }, {
     timezone: 'Asia/Ho_Chi_Minh',
+});
+
+// --- /invite command (referral program) ---
+bot.command('invite', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    const link = `https://t.me/${bot.botInfo.username}?start=ref_${userId}`;
+    const count = await referralService.getRewardedCount(userId);
+
+    let msg =
+        `🔗 Mời bạn bè dùng EdgeBook:\n${link}\n\n` +
+        `Khi người được mời lưu research đầu tiên, cả hai nhận +7 ngày Pro!\n\n` +
+        `✅ Đã mời thành công: ${count} người`;
+
+    if (count < 3) {
+        msg += `\n🏆 Mời đủ 3 người: +30 ngày Pro`;
+    } else if (count < 10) {
+        msg += `\n👑 Mời đủ 10 người: +30 ngày Premium`;
+    }
+
+    await ctx.reply(msg);
 });
 
 // --- /growth command (admin-only growth dashboard) ---
@@ -2054,6 +2129,7 @@ const BOT_COMMANDS = [
     { command: 'help', description: '📓 Hướng dẫn sử dụng & danh sách lệnh' },
     { command: 'plan', description: '💳 Xem gói hiện tại & giới hạn' },
     { command: 'upgrade', description: '⭐ Nâng cấp Pro / Premium' },
+    { command: 'invite', description: '🔗 Mời bạn, cả hai nhận +7 ngày Pro' },
 ];
 
 // Global error handler — prevents bot from crashing on unhandled errors (e.g. DB failures)
