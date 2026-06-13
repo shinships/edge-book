@@ -112,6 +112,18 @@ async function buildPriceBlock(tickers: string[]): Promise<string> {
     }
 }
 
+// Footer + "Share" button appended to digest messages — viral loop: tapping
+// the button lets the recipient pick a chat with a teaser + bot link pre-filled.
+function digestShareExtras(): { footer: string; keyboard: InlineKeyboard } {
+    const username = bot.botInfo.username;
+    const footer = `\n\n— 🤖 EdgeBook · t.me/${username}`;
+    const keyboard = new InlineKeyboard().switchInline(
+        '↗️ Chia sẻ',
+        `Research OS tự tag ticker + chấm sentiment, gửi digest mỗi sáng. Thử xem: t.me/${username}`
+    );
+    return { footer, keyboard };
+}
+
 // --- DISCIPLINE: 15s safety gate (in-memory, like AI sessions) ---
 
 type OpenTradeParams = Parameters<TradeService['openTrade']>[1];
@@ -618,7 +630,8 @@ bot.on('message:text', async (ctx) => {
         const digestData = await researchService.getDigestData(userId, 24);
         const digest = await aiService.generateDigest(digestData);
         const priceBlock = await buildPriceBlock(digestData.topTickers.map((t) => t.ticker));
-        await ctx.reply(digest + priceBlock);
+        const { footer, keyboard } = digestShareExtras();
+        await ctx.reply(digest + priceBlock + footer, { reply_markup: keyboard });
         return;
     }
 
@@ -1637,7 +1650,8 @@ cron.schedule('0 8 * * *', async () => {
 
             const digest = await aiService.generateDigest(digestData);
             const priceBlock = await buildPriceBlock(digestData.topTickers.map((t) => t.ticker));
-            await bot.api.sendMessage(userId, `📬 Daily Research Digest\n\n${digest}${priceBlock}`);
+            const { footer, keyboard } = digestShareExtras();
+            await bot.api.sendMessage(userId, `📬 Daily Research Digest\n\n${digest}${priceBlock}${footer}`, { reply_markup: keyboard });
             console.log(`[Digest] Sent digest to user ${userId} (${digestData.totalItems} items)`);
         } catch (error) {
             console.error(`[Digest] Error sending digest to user ${userId}:`, error);
