@@ -6,7 +6,6 @@ import { UserService } from './services/user.service';
 import { TodoService } from './services/todo.service';
 import { ResearchService } from './services/research.service';
 import { PlanService } from './services/plan.service';
-import { PaymentService } from './services/payment.service';
 import { SepayService } from './services/sepay.service';
 import { TradeService } from './services/trade.service';
 import { ReportService } from './services/report.service';
@@ -28,7 +27,6 @@ const todoService = new TodoService();
 const userService = new UserService();
 const researchService = new ResearchService();
 const planService = new PlanService(config.adminUserIds);
-const paymentService = new PaymentService(planService);
 const sepayService = new SepayService(planService);
 const tradeService = new TradeService();
 const reportService = new ReportService();
@@ -1809,10 +1807,8 @@ bot.command('upgrade', async (ctx) => {
     if (!userId) return;
 
     const plan = await planService.getPlan(userId);
-    const hasIntl = !!config.lsApiKey;
-    const hasVn = sepayService.isConfigured();
 
-    if (!hasIntl && !hasVn) {
+    if (!sepayService.isConfigured()) {
         await ctx.reply('⚠️ Tính năng thanh toán chưa được kích hoạt. Vui lòng liên hệ admin.');
         return;
     }
@@ -1831,8 +1827,8 @@ bot.command('upgrade', async (ctx) => {
         ? 'Bạn đang dùng ⭐ Pro. Upgrade lên 💎 Premium để mở khoá Sentiment & Export.'
         : 'Chọn plan muốn nâng cấp:';
 
-    const proPrice = hasVn ? `$9.99/tháng (~${sepayService.getPrice('pro').toLocaleString('vi-VN')}đ)` : '$9.99/tháng';
-    const premiumPrice = hasVn ? `$24.99/tháng (~${sepayService.getPrice('premium').toLocaleString('vi-VN')}đ)` : '$24.99/tháng';
+    const proPrice = `${sepayService.getPrice('pro').toLocaleString('vi-VN')}đ/tháng`;
+    const premiumPrice = `${sepayService.getPrice('premium').toLocaleString('vi-VN')}đ/tháng`;
 
     await ctx.reply(
         `💳 Nâng cấp EdgeBook\n\n${currentTierText}\n\n` +
@@ -1841,24 +1837,6 @@ bot.command('upgrade', async (ctx) => {
         { reply_markup: keyboard }
     );
 });
-
-// Send a LemonSqueezy checkout link (international cards)
-async function sendLsCheckout(ctx: Context, userId: number, tier: 'pro' | 'premium'): Promise<void> {
-    await ctx.reply('⏳ Đang tạo link thanh toán...');
-    const url = await paymentService.createCheckoutLink(userId, tier);
-
-    if (!url) {
-        await ctx.reply('❌ Không thể tạo link thanh toán. Vui lòng thử lại sau hoặc liên hệ admin.');
-        return;
-    }
-
-    const tierLabel = tier === 'pro' ? '⭐ Pro ($9.99/tháng)' : '💎 Premium ($24.99/tháng)';
-    await ctx.reply(
-        `${tierLabel} — link thanh toán thẻ quốc tế:\n\n${url}\n\n` +
-        `⏰ Link có hiệu lực trong 30 phút.\n` +
-        `Sau khi thanh toán, plan sẽ tự động cập nhật! 🚀`
-    );
-}
 
 // Send a SePay VietQR code for direct bank-transfer payment (VN users)
 async function sendSepayQuote(ctx: Context, userId: number, tier: 'pro' | 'premium'): Promise<void> {
@@ -1874,56 +1852,19 @@ async function sendSepayQuote(ctx: Context, userId: number, tier: 'pro' | 'premi
     });
 }
 
-// Pick a payment method: skip the menu if only one is configured.
-async function choosePaymentMethod(ctx: Context, userId: number, tier: 'pro' | 'premium'): Promise<void> {
-    const hasIntl = !!config.lsApiKey;
-    const hasVn = sepayService.isConfigured();
-
-    if (hasIntl && hasVn) {
-        const keyboard = new InlineKeyboard()
-            .text('💳 Thẻ quốc tế', `pay:${tier}:intl`)
-            .row()
-            .text('🇻🇳 Chuyển khoản VietQR', `pay:${tier}:vn`);
-        const tierLabel = tier === 'pro' ? '⭐ Pro' : '💎 Premium';
-        await ctx.reply(`${tierLabel} — chọn phương thức thanh toán:`, { reply_markup: keyboard });
-    } else if (hasVn) {
-        await sendSepayQuote(ctx, userId, tier);
-    } else if (hasIntl) {
-        await sendLsCheckout(ctx, userId, tier);
-    } else {
-        await ctx.reply('❌ Chưa cấu hình phương thức thanh toán. Liên hệ admin.');
-    }
-}
-
 // Handle upgrade inline keyboard callbacks
 bot.callbackQuery('upgrade_pro', async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = ctx.from?.id;
     if (!userId) return;
-    await choosePaymentMethod(ctx, userId, 'pro');
+    await sendSepayQuote(ctx, userId, 'pro');
 });
 
 bot.callbackQuery('upgrade_premium', async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = ctx.from?.id;
     if (!userId) return;
-    await choosePaymentMethod(ctx, userId, 'premium');
-});
-
-// Handle payment-method selection (only shown when both methods are configured)
-bot.callbackQuery(/^pay:(pro|premium):(intl|vn)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    const userId = ctx.from?.id;
-    if (!userId) return;
-
-    const tier = ctx.match[1] as 'pro' | 'premium';
-    const method = ctx.match[2] as 'intl' | 'vn';
-
-    if (method === 'intl') {
-        await sendLsCheckout(ctx, userId, tier);
-    } else {
-        await sendSepayQuote(ctx, userId, tier);
-    }
+    await sendSepayQuote(ctx, userId, 'premium');
 });
 
 // Research-to-trade link callbacks (Premium)
@@ -2154,14 +2095,13 @@ bot.catch((err) => {
 });
 
 // Start webhook server (runs alongside bot polling)
-startWebhookServer(paymentService, sepayService, bot);
+startWebhookServer(sepayService, bot);
 
 // Start the bot
 bot.start({
     onStart: async (botInfo) => {
         console.log(`EdgeBook bot @${botInfo.username} started!`);
         console.log('EdgeBook features enabled: auto-tag, search, digest, star, stats, trade journal');
-        console.log('Payment: /upgrade command enabled' + (config.lsApiKey ? '' : ' (⚠️ LS keys not set)'));
         console.log('Payment: SePay VietQR ' + (sepayService.isConfigured() ? 'enabled' : '(⚠️ SEPAY_* not set)'));
         try {
             await bot.api.setMyCommands(BOT_COMMANDS);
