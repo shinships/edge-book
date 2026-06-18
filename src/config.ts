@@ -16,6 +16,11 @@ export const config = {
 
     webhookPort: parseInt(process.env.WEBHOOK_PORT || '3000', 10),
 
+    // TODO(intl-payments): Re-add LemonSqueezy keys here when launching for international users.
+    // Keys needed: LEMONSQUEEZY_API_KEY, LEMONSQUEEZY_STORE_ID, LEMONSQUEEZY_PRO_VARIANT_ID,
+    // LEMONSQUEEZY_PREMIUM_VARIANT_ID, LEMONSQUEEZY_WEBHOOK_SECRET.
+    // Restore payment.service.ts (removed in Sprint 15) and wire it back into index.ts + webhook.server.ts.
+
     // --- SePay Payment (VietQR bank transfer, for VN users) ---
     sepayAccountNumber: process.env.SEPAY_ACCOUNT_NUMBER || '',
     sepayBankCode: process.env.SEPAY_BANK_CODE || '',

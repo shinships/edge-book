@@ -30,6 +30,10 @@ export function startWebhookServer(sepayService: SepayService, bot: Bot): void {
         res.json({ status: 'ok', timestamp: new Date().toISOString() });
     });
 
+    // TODO(intl-payments): Re-add the /webhook/lemonsqueezy endpoint here for international cards.
+    // It needs express.raw() (not express.json()) so the raw Buffer is available for HMAC-SHA256
+    // signature verification (PaymentService.verifyWebhookSignature). See git history (Sprint 10-14).
+
     // SePay webhook — VietQR bank-transfer notifications. JSON body, API-key auth.
     app.post('/webhook/sepay', express.json(), async (req, res) => {
         const authHeader = req.headers['authorization'] as string | undefined;

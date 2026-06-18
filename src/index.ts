@@ -1802,6 +1802,11 @@ bot.command('growth', async (ctx) => {
 });
 
 // --- /upgrade command ---
+// TODO(intl-payments): For international launch, add a payment-method selection step here.
+// When both SePay and LemonSqueezy are configured, show an InlineKeyboard asking the user
+// to pick "💳 Thẻ quốc tế" (→ sendLsCheckout) or "🇻🇳 Chuyển khoản" (→ sendSepayQuote).
+// Callback pattern was: pay:(pro|premium):(intl|vn). See git history (Sprint 10-14) for
+// the removed choosePaymentMethod() helper and sendLsCheckout() implementation.
 bot.command('upgrade', async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) return;
