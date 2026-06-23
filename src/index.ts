@@ -404,7 +404,7 @@ bot.command('help', (ctx) => {
         '📓 EdgeBook · các lệnh chính\n' +
         '\n' +
         '💬 Chat & cá nhân hoá\n' +
-        '• Hỏi AI về trading, đầu tư, phân tích kỹ thuật (free 1 lần/ngày, Pro+ không giới hạn)\n' +
+        '• Hỏi AI về trading, đầu tư, phân tích kỹ thuật (free 1, Pro 20, Premium 60 lượt/ngày)\n' +
         '• Call me [tên] · My job is [nghề]\n' +
         '\n' +
         '📂 Docs\n' +

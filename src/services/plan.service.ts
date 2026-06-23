@@ -54,7 +54,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     },
     pro: {
         maxForwardsPerDay: -1,
-        maxChatsPerDay: -1,
+        maxChatsPerDay: 20,
         canSearch: true,
         canDigest: true,
         canStar: true,
@@ -70,7 +70,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     },
     premium: {
         maxForwardsPerDay: -1,
-        maxChatsPerDay: -1,
+        maxChatsPerDay: 60,
         canSearch: true,
         canDigest: true,
         canStar: true,
