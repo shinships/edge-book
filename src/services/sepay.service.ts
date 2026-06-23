@@ -28,6 +28,14 @@ export interface SepayQuote {
     content: string;
 }
 
+// Kết quả xử lý webhook — discriminated union để server báo admin khi có
+// giao dịch lạ (sai nội dung / sai số tiền) thay vì im lặng.
+export type SepayResult =
+    | { status: 'upgraded'; userId: number; tier: PlanTier }
+    | { status: 'ignored' }                                   // không phải tiền vào, hoặc đã xử lý
+    | { status: 'unmatched'; amount: number; content: string }// không parse được userId/tier
+    | { status: 'underpaid'; userId: number; tier: PlanTier; amount: number; expected: number };
+
 export class SepayService {
     constructor(private planService: PlanService) {}
 
@@ -78,35 +86,36 @@ export class SepayService {
         return { userId, tier: match[2] === 'PRO' ? 'pro' : 'premium' };
     }
 
-    // Returns the upgraded userId + tier if a plan was changed, null otherwise.
-    async handleWebhookEvent(payload: SepayWebhookPayload): Promise<{ userId: number; tier: PlanTier } | null> {
+    // Xử lý 1 giao dịch SePay. Trả về SepayResult để server biết DM user (upgraded)
+    // hay báo admin (unmatched / underpaid).
+    async handleWebhookEvent(payload: SepayWebhookPayload): Promise<SepayResult> {
         if (payload.transferType !== 'in') {
-            return null;
+            return { status: 'ignored' };
         }
 
         const parsed = this.parsePaymentContent(payload.content || payload.description || '');
         if (!parsed) {
             console.log(`SePay webhook: could not parse payment code from content "${payload.content}"`);
-            return null;
+            return { status: 'unmatched', amount: payload.transferAmount, content: payload.content || payload.description || '' };
         }
 
         const { userId, tier } = parsed;
         const expectedAmount = this.getPrice(tier as 'pro' | 'premium');
         if (payload.transferAmount < expectedAmount) {
             console.warn(`SePay webhook: amount ${payload.transferAmount} < expected ${expectedAmount} for user ${userId} (${tier})`);
-            return null;
+            return { status: 'underpaid', userId, tier, amount: payload.transferAmount, expected: expectedAmount };
         }
 
         // Idempotency — skip if this SePay transaction was already processed
         const currentPlan = await this.planService.getPlan(userId);
         if (currentPlan.sepayTxId === String(payload.id)) {
             console.log(`SePay webhook: tx ${payload.id} already processed for user ${userId}, skipping.`);
-            return null;
+            return { status: 'ignored' };
         }
 
         await this.planService.upgradePlan(userId, tier, 30, undefined, String(payload.id));
         console.log(`✅ Upgraded user ${userId} to ${tier} via SePay (tx ${payload.id})`);
 
-        return { userId, tier };
+        return { status: 'upgraded', userId, tier };
     }
 }

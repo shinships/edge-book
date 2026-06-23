@@ -210,15 +210,23 @@ export class PlanService {
     }
 
     async upgradePlan(userId: number, tier: PlanTier, durationDays?: number, orderId?: string, sepayTxId?: string): Promise<void> {
-        await this.getPlan(userId); // ensure exists
+        const plan = await this.getPlan(userId); // ensure exists
+
+        // Không hạ tier ngầm: nếu user đang ở tier cao hơn tier vừa trả tiền
+        // (vd Premium lỡ quét QR Pro), giữ nguyên tier cao và vẫn cộng thêm ngày.
+        const tierRank: Record<PlanTier, number> = { free: 0, pro: 1, premium: 2 };
+        const effectiveTier = tierRank[plan.tier] > tierRank[tier] ? plan.tier : tier;
 
         let expiresAt: Date | null = null;
         if (durationDays) {
-            expiresAt = new Date();
-            expiresAt.setDate(expiresAt.getDate() + durationDays);
+            // Cộng dồn: gia hạn nối tiếp từ ngày hết hạn hiện tại nếu còn hạn,
+            // ngược lại tính từ bây giờ. Tránh user mất số ngày còn lại khi gia hạn.
+            const now = new Date();
+            const base = plan.expiresAt && new Date(plan.expiresAt) > now ? new Date(plan.expiresAt) : now;
+            expiresAt = new Date(base.getTime() + durationDays * 24 * 60 * 60 * 1000);
         }
 
-        const set: Partial<typeof plans.$inferInsert> = { tier };
+        const set: Partial<typeof plans.$inferInsert> = { tier: effectiveTier };
         if (expiresAt !== null) set.expiresAt = expiresAt;
         if (orderId) set.lsOrderId = orderId;
         if (sepayTxId) set.sepayTxId = sepayTxId;

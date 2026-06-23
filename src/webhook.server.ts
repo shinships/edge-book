@@ -3,6 +3,19 @@ import { Bot } from 'grammy';
 import { config } from './config';
 import { SepayService, SepayWebhookPayload } from './services/sepay.service';
 
+// Báo cho admin (ADMIN_USER_IDS) khi có giao dịch SePay vào tài khoản nhưng
+// không tự nâng cấp được (sai nội dung CK, hoặc chuyển thiếu tiền) — tránh
+// trường hợp user chuyển khoản mà hệ thống im lặng, không ai biết để xử lý tay.
+async function notifyAdmins(bot: Bot, message: string): Promise<void> {
+    for (const adminId of config.adminUserIds) {
+        try {
+            await bot.api.sendMessage(adminId, message);
+        } catch (err) {
+            console.error(`Failed to DM admin ${adminId}:`, err);
+        }
+    }
+}
+
 // -----------------------------------------------------------------------
 // Webhook HTTP server for payment events (SePay VietQR only)
 // -----------------------------------------------------------------------
@@ -48,9 +61,24 @@ export function startWebhookServer(sepayService: SepayService, bot: Bot): void {
         try {
             const payload = req.body as SepayWebhookPayload;
             const result = await sepayService.handleWebhookEvent(payload);
-            if (result) {
+
+            if (result.status === 'upgraded') {
                 const priceLabel = `${sepayService.getPrice(result.tier as 'pro' | 'premium').toLocaleString('vi-VN')}đ`;
                 await sendUpgradeDm(bot, result.userId, result.tier as 'pro' | 'premium', priceLabel);
+            } else if (result.status === 'unmatched') {
+                await notifyAdmins(
+                    bot,
+                    `⚠️ SePay: nhận ${result.amount.toLocaleString('vi-VN')}đ nhưng KHÔNG đọc được nội dung CK.\n` +
+                    `Nội dung: "${result.content}"\n` +
+                    `→ Cần kiểm tra & nâng cấp tay (tx ${payload.id}).`
+                );
+            } else if (result.status === 'underpaid') {
+                await notifyAdmins(
+                    bot,
+                    `⚠️ SePay: user ${result.userId} chuyển THIẾU tiền cho ${result.tier}.\n` +
+                    `Nhận ${result.amount.toLocaleString('vi-VN')}đ / cần ${result.expected.toLocaleString('vi-VN')}đ (tx ${payload.id}).\n` +
+                    `→ Cần liên hệ user hoặc hoàn tiền.`
+                );
             }
         } catch (err) {
             console.error('SePay webhook processing error:', err);
