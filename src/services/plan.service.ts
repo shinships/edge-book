@@ -11,6 +11,7 @@ export interface UserPlan {
     tier: PlanTier;
     expiresAt?: string;
     dailyForwardCount: number;
+    dailyChatCount: number;
     lastResetDate: string;
     lsOrderId?: string;
     sepayTxId?: string;
@@ -19,6 +20,7 @@ export interface UserPlan {
 
 export interface PlanLimits {
     maxForwardsPerDay: number;
+    maxChatsPerDay: number;   // -1 = unlimited
     canSearch: boolean;
     canDigest: boolean;
     canStar: boolean;
@@ -36,6 +38,7 @@ export interface PlanLimits {
 const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     free: {
         maxForwardsPerDay: 10,
+        maxChatsPerDay: 1,
         canSearch: false,
         canDigest: false,
         canStar: true,
@@ -51,6 +54,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     },
     pro: {
         maxForwardsPerDay: -1,
+        maxChatsPerDay: -1,
         canSearch: true,
         canDigest: true,
         canStar: true,
@@ -66,6 +70,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     },
     premium: {
         maxForwardsPerDay: -1,
+        maxChatsPerDay: -1,
         canSearch: true,
         canDigest: true,
         canStar: true,
@@ -89,6 +94,7 @@ function toPlan(row: PlanRow): UserPlan {
         tier: row.tier as PlanTier,
         expiresAt: row.expiresAt?.toISOString(),
         dailyForwardCount: row.dailyForwardCount,
+        dailyChatCount: row.dailyChatCount,
         lastResetDate: row.lastResetDate,
         lsOrderId: row.lsOrderId ?? undefined,
         sepayTxId: row.sepayTxId ?? undefined,
@@ -125,6 +131,7 @@ export class PlanService {
             userId,
             tier: 'free',
             dailyForwardCount: 0,
+            dailyChatCount: 0,
             lastResetDate: today,
         }).onConflictDoNothing();
 
@@ -132,7 +139,7 @@ export class PlanService {
 
         if (row.lastResetDate !== today) {
             const [updated] = await db.update(plans)
-                .set({ dailyForwardCount: 0, lastResetDate: today })
+                .set({ dailyForwardCount: 0, dailyChatCount: 0, lastResetDate: today })
                 .where(eq(plans.userId, userId))
                 .returning();
             return toPlan(updated!);
@@ -171,6 +178,29 @@ export class PlanService {
         const plan = await this.getPlan(userId);
         await db.update(plans)
             .set({ dailyForwardCount: plan.dailyForwardCount + 1 })
+            .where(eq(plans.userId, userId));
+    }
+
+    async canChat(userId: number): Promise<{ allowed: boolean; remaining: number; limit: number }> {
+        const plan = await this.getPlan(userId);
+        const limits = PLAN_LIMITS[this.effectiveTier(plan, userId)];
+
+        if (limits.maxChatsPerDay === -1) {
+            return { allowed: true, remaining: -1, limit: -1 };
+        }
+
+        const remaining = limits.maxChatsPerDay - plan.dailyChatCount;
+        return {
+            allowed: remaining > 0,
+            remaining: Math.max(0, remaining),
+            limit: limits.maxChatsPerDay,
+        };
+    }
+
+    async incrementChatCount(userId: number): Promise<void> {
+        const plan = await this.getPlan(userId);
+        await db.update(plans)
+            .set({ dailyChatCount: plan.dailyChatCount + 1 })
             .where(eq(plans.userId, userId));
     }
 
@@ -238,6 +268,12 @@ export class PlanService {
             info += `📤 Forwards hôm nay: ${plan.dailyForwardCount}/${limits.maxForwardsPerDay}\n`;
         } else {
             info += `📤 Forwards: Unlimited\n`;
+        }
+
+        if (limits.maxChatsPerDay !== -1) {
+            info += `💬 Chat AI hôm nay: ${plan.dailyChatCount}/${limits.maxChatsPerDay}\n`;
+        } else {
+            info += `💬 Chat AI: Unlimited\n`;
         }
 
         info += `🔍 Search: ${limits.canSearch ? '✅' : '🔒 Pro'}\n`;

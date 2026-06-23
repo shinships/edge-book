@@ -404,7 +404,7 @@ bot.command('help', (ctx) => {
         '📓 EdgeBook · các lệnh chính\n' +
         '\n' +
         '💬 Chat & cá nhân hoá\n' +
-        '• Nhắn bất kỳ để hỏi AI\n' +
+        '• Hỏi AI về trading, đầu tư, phân tích kỹ thuật (free 1 lần/ngày, Pro+ không giới hạn)\n' +
         '• Call me [tên] · My job is [nghề]\n' +
         '\n' +
         '📂 Docs\n' +
@@ -438,9 +438,11 @@ bot.command('help', (ctx) => {
         '• Review → đối soát quy trình các lệnh đóng hôm nay\n' +
         '• Thua lệnh → bot hỏi có tuân thủ kế hoạch, nhắc giảm 50% size\n' +
         '\n' +
-        '💹 Market & Alerts\n' +
-        '• Watch: BTC · Unwatch: BTC · Watchlist → giá live + 24h\n' +
-        '• Alert: BTC > 70k · Alert: ETH < 2400 (Pro)\n' +
+        '💹 Market & Alerts (giá crypto live qua Binance)\n' +
+        '• Watch: BTC · Unwatch: BTC (free 3 ticker, Pro+ không giới hạn)\n' +
+        '• Watchlist → giá live + thay đổi 24h từng ticker\n' +
+        '• Alert: BTC > 70k · Alert: ETH < 2400 (Pro 10 alert, Premium unlimited)\n' +
+        '• Bot check giá mỗi phút, báo ngay khi chạm\n' +
         '• Alerts → xem & xoá alerts đang chạy\n' +
         '\n' +
         '💳 Tài khoản\n' +
@@ -1554,8 +1556,17 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // 4. Default: Chat with AI
+    // 4. Default: Chat with AI (free tối đa 1 lần/ngày — tránh tốn token chủ đề ngoài)
+    const chatQuota = await planService.canChat(userId);
+    if (!chatQuota.allowed) {
+        await ctx.reply(
+            `🔒 Free chỉ được chat AI ${chatQuota.limit} lần/ngày (đã dùng hết hôm nay).\n` +
+            `Gõ /upgrade lên Pro để chat không giới hạn, hoặc dùng các lệnh khác (Watchlist, Trades, Search...).`
+        );
+        return;
+    }
     const response = await aiService.chat(text, userId);
+    if (chatQuota.limit !== -1) await planService.incrementChatCount(userId);
     await ctx.reply(response, { parse_mode: 'Markdown' });
 });
 

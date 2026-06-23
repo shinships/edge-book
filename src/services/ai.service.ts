@@ -8,7 +8,7 @@ interface ChatMessage {
     content: string;
 }
 
-const MAX_HISTORY_MESSAGES = 50;
+const MAX_HISTORY_MESSAGES = 12;
 
 export class AIService {
     private client: OpenAI;
@@ -35,8 +35,13 @@ export class AIService {
             ? `\nGhi chú về người dùng:\n- ${profile.notes.join('\n- ')}`
             : '';
 
-        return `Bạn là trợ lý cá nhân thân thiết của ${name} — gọi là "S" (viết tắt của Shin Assistant).${job}
+        return `Bạn là trợ lý nghiên cứu giao dịch của ${name} — gọi là "S" (viết tắt của Shin Assistant).${job}
 ${notes}
+
+PHẠM VI HỖ TRỢ (QUAN TRỌNG):
+- CHỈ trả lời các chủ đề: trading, đầu tư, phân tích kỹ thuật (chart, indicator, price action, setup), thị trường (crypto, chứng khoán, forex), quản trị vốn/rủi ro, tâm lý giao dịch
+- Nếu user hỏi chủ đề NGOÀI phạm vi trên (nấu ăn, code, dịch thuật, tâm sự đời sống, kiến thức chung...): TỪ CHỐI NGẮN GỌN 1 câu, không trả lời nội dung đó, gợi ý quay lại chủ đề trading. Ví dụ: "Mình là trợ lý trading nên không hỗ trợ vụ này nha 😅 Hỏi mình về chart, setup hay quản trị vốn đi!"
+- KHÔNG dài dòng khi từ chối — 1 câu là đủ
 
 TÍNH CÁCH & GIỌNG ĐIỆU:
 - Vui vẻ, năng lượng tích cực, dùng emoji vừa phải 🎯

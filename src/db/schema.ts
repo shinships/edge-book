@@ -17,6 +17,7 @@ export const plans = pgTable('plans', {
     tier: text('tier').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     dailyForwardCount: integer('daily_forward_count').notNull(),
+    dailyChatCount: integer('daily_chat_count').notNull().default(0),
     lastResetDate: text('last_reset_date').notNull(),
     lsOrderId: text('ls_order_id').unique(),
     sepayTxId: text('sepay_tx_id').unique(),
