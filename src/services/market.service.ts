@@ -21,10 +21,19 @@ export class MarketService {
     private priceCache = new Map<string, CacheEntry<number>>();
     private statsCache = new Map<string, CacheEntry<Ticker24h>>();
 
+    // Một số ticker không có cặp USDT trực tiếp trên Binance — map về token tương đương.
+    // Vàng (XAU/XAUUSD/GOLD) -> PAXG (PAX Gold, 1 PAXG ≈ 1 oz vàng, giá bám sát spot).
+    private static readonly BASE_ALIAS: Record<string, string> = {
+        XAU: 'PAXG',
+        XAUUSD: 'PAXG',
+        GOLD: 'PAXG',
+    };
+
     // Map a ticker to a Binance USDT symbol. Strips any pair suffix first so
     // "ETH/USDT" -> "ETHUSDT", not "ETHUSDTUSDT".
     private toSymbol(ticker: string): string {
-        const base = ticker.toUpperCase().split(/[./-]/)[0].replace(/[^A-Z0-9]/g, '');
+        const raw = ticker.toUpperCase().split(/[./-]/)[0].replace(/[^A-Z0-9]/g, '');
+        const base = MarketService.BASE_ALIAS[raw] ?? raw;
         return base + 'USDT';
     }
 
