@@ -451,6 +451,82 @@ bot.command('help', (ctx) => {
     );
 });
 
+// NOTE: /upgrade, /invite, /growth must be registered BEFORE the generic
+// message:text handler below. grammY runs middleware in registration order and
+// the message:text handler doesn't call next(), so any bot.command() declared
+// after it would never fire (the text would fall through to AI chat instead).
+bot.command('invite', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    const link = `https://t.me/${bot.botInfo.username}?start=ref_${userId}`;
+    const count = await referralService.getRewardedCount(userId);
+
+    let msg =
+        `🔗 Mời bạn bè dùng EdgeBook:\n${link}\n\n` +
+        `Khi người được mời lưu research đầu tiên, cả hai nhận +7 ngày Pro!\n\n` +
+        `✅ Đã mời thành công: ${count} người`;
+
+    if (count < 3) {
+        msg += `\n🏆 Mời đủ 3 người: +30 ngày Pro`;
+    } else if (count < 10) {
+        msg += `\n👑 Mời đủ 10 người: +30 ngày Premium`;
+    }
+
+    await ctx.reply(msg);
+});
+
+// --- /growth command (admin-only growth dashboard) ---
+bot.command('growth', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId || !planService.isAdmin(userId)) return;
+
+    const report = await growthService.getReport();
+    await ctx.reply(report);
+});
+
+// --- /upgrade command ---
+// TODO(intl-payments): For international launch, add a payment-method selection step here.
+// When both SePay and LemonSqueezy are configured, show an InlineKeyboard asking the user
+// to pick "💳 Thẻ quốc tế" (→ sendLsCheckout) or "🇻🇳 Chuyển khoản" (→ sendSepayQuote).
+// Callback pattern was: pay:(pro|premium):(intl|vn). See git history (Sprint 10-14) for
+// the removed choosePaymentMethod() helper and sendLsCheckout() implementation.
+bot.command('upgrade', async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+
+    const plan = await planService.getPlan(userId);
+
+    if (!sepayService.isConfigured()) {
+        await ctx.reply('⚠️ Tính năng thanh toán chưa được kích hoạt. Vui lòng liên hệ admin.');
+        return;
+    }
+
+    if (plan.tier === 'premium') {
+        await ctx.reply('💎 Bạn đang dùng Premium, plan cao nhất! Cảm ơn đã ủng hộ 🙏');
+        return;
+    }
+
+    const keyboard = new InlineKeyboard()
+        .text('⭐ Pro', 'upgrade_pro')
+        .row()
+        .text('💎 Premium', 'upgrade_premium');
+
+    const currentTierText = plan.tier === 'pro'
+        ? 'Bạn đang dùng ⭐ Pro. Upgrade lên 💎 Premium để mở khoá Sentiment & Export.'
+        : 'Chọn plan muốn nâng cấp:';
+
+    const proPrice = `${sepayService.getPrice('pro').toLocaleString('vi-VN')}đ/tháng`;
+    const premiumPrice = `${sepayService.getPrice('premium').toLocaleString('vi-VN')}đ/tháng`;
+
+    await ctx.reply(
+        `💳 Nâng cấp EdgeBook\n\n${currentTierText}\n\n` +
+        `⭐ Pro (${proPrice}):\n• Unlimited forwards\n• Search & Tag\n• Daily Digest\n• Ask AI\n\n` +
+        `💎 Premium (${premiumPrice}):\n• Tất cả Pro features\n• Sentiment scoring\n• Export research\n• Unlimited Docs`,
+        { reply_markup: keyboard }
+    );
+});
+
 // General Chat Handler
 bot.on('message:text', async (ctx) => {
     const text = ctx.message.text;
@@ -1779,79 +1855,6 @@ cron.schedule('0 21 * * *', async () => {
     console.log('[Audit] EOD process-audit cron completed.');
 }, {
     timezone: 'Asia/Ho_Chi_Minh',
-});
-
-// --- /invite command (referral program) ---
-bot.command('invite', async (ctx) => {
-    const userId = ctx.from?.id;
-    if (!userId) return;
-
-    const link = `https://t.me/${bot.botInfo.username}?start=ref_${userId}`;
-    const count = await referralService.getRewardedCount(userId);
-
-    let msg =
-        `🔗 Mời bạn bè dùng EdgeBook:\n${link}\n\n` +
-        `Khi người được mời lưu research đầu tiên, cả hai nhận +7 ngày Pro!\n\n` +
-        `✅ Đã mời thành công: ${count} người`;
-
-    if (count < 3) {
-        msg += `\n🏆 Mời đủ 3 người: +30 ngày Pro`;
-    } else if (count < 10) {
-        msg += `\n👑 Mời đủ 10 người: +30 ngày Premium`;
-    }
-
-    await ctx.reply(msg);
-});
-
-// --- /growth command (admin-only growth dashboard) ---
-bot.command('growth', async (ctx) => {
-    const userId = ctx.from?.id;
-    if (!userId || !planService.isAdmin(userId)) return;
-
-    const report = await growthService.getReport();
-    await ctx.reply(report);
-});
-
-// --- /upgrade command ---
-// TODO(intl-payments): For international launch, add a payment-method selection step here.
-// When both SePay and LemonSqueezy are configured, show an InlineKeyboard asking the user
-// to pick "💳 Thẻ quốc tế" (→ sendLsCheckout) or "🇻🇳 Chuyển khoản" (→ sendSepayQuote).
-// Callback pattern was: pay:(pro|premium):(intl|vn). See git history (Sprint 10-14) for
-// the removed choosePaymentMethod() helper and sendLsCheckout() implementation.
-bot.command('upgrade', async (ctx) => {
-    const userId = ctx.from?.id;
-    if (!userId) return;
-
-    const plan = await planService.getPlan(userId);
-
-    if (!sepayService.isConfigured()) {
-        await ctx.reply('⚠️ Tính năng thanh toán chưa được kích hoạt. Vui lòng liên hệ admin.');
-        return;
-    }
-
-    if (plan.tier === 'premium') {
-        await ctx.reply('💎 Bạn đang dùng Premium, plan cao nhất! Cảm ơn đã ủng hộ 🙏');
-        return;
-    }
-
-    const keyboard = new InlineKeyboard()
-        .text('⭐ Pro', 'upgrade_pro')
-        .row()
-        .text('💎 Premium', 'upgrade_premium');
-
-    const currentTierText = plan.tier === 'pro'
-        ? 'Bạn đang dùng ⭐ Pro. Upgrade lên 💎 Premium để mở khoá Sentiment & Export.'
-        : 'Chọn plan muốn nâng cấp:';
-
-    const proPrice = `${sepayService.getPrice('pro').toLocaleString('vi-VN')}đ/tháng`;
-    const premiumPrice = `${sepayService.getPrice('premium').toLocaleString('vi-VN')}đ/tháng`;
-
-    await ctx.reply(
-        `💳 Nâng cấp EdgeBook\n\n${currentTierText}\n\n` +
-        `⭐ Pro (${proPrice}):\n• Unlimited forwards\n• Search & Tag\n• Daily Digest\n• Ask AI\n\n` +
-        `💎 Premium (${premiumPrice}):\n• Tất cả Pro features\n• Sentiment scoring\n• Export research\n• Unlimited Docs`,
-        { reply_markup: keyboard }
-    );
 });
 
 // Send a SePay VietQR code for direct bank-transfer payment (VN users)
