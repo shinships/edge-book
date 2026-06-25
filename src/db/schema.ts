@@ -79,8 +79,11 @@ export const alerts = pgTable('alerts', {
     id: text('id').primaryKey(),
     userId: bigint('user_id', { mode: 'number' }).notNull(),
     ticker: text('ticker').notNull(),
-    condition: text('condition').notNull(),           // 'above' | 'below'
-    targetPrice: real('target_price').notNull(),
+    condition: text('condition').notNull(),           // 'above' | 'below' (direction; also stance for foreign/rsi)
+    targetPrice: real('target_price').notNull(),      // price target, or threshold (rsi level / volume multiple)
+    // 'price' (intraday) | 'foreign' | 'volume' | 'rsi' | 'macross' (EOD, VN stocks)
+    alertType: text('alert_type').notNull().default('price'),
+    params: jsonb('params').$type<Record<string, any>>(),
     status: text('status').notNull(),                 // 'active' | 'triggered'
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
     triggeredAt: timestamp('triggered_at', { withTimezone: true }),
@@ -102,6 +105,22 @@ export const disciplineState = pgTable('discipline_state', {
     dailyLossLimit: integer('daily_loss_limit').notNull().default(3),
     cooldownUntil: timestamp('cooldown_until', { withTimezone: true }),
 });
+
+// Real position ledger (distinct from `trades`, which is a journal of entries/exits).
+// One row per user+ticker; quantity & avgCost track the live holding, realizedPnl the
+// cumulative booked profit from partial/full sells. Prices in native units (VN: thousand
+// VND, crypto: USD) consistent with MarketRouter.
+export const portfolioPositions = pgTable('portfolio_positions', {
+    id: text('id').primaryKey(),
+    userId: bigint('user_id', { mode: 'number' }).notNull(),
+    ticker: text('ticker').notNull(),
+    quantity: real('quantity').notNull(),
+    avgCost: real('avg_cost').notNull(),
+    market: text('market').notNull(),                          // 'vn' | 'crypto'
+    realizedPnl: real('realized_pnl').notNull().default(0),    // money units (qty * price)
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+}, (t) => [uniqueIndex('portfolio_user_ticker_idx').on(t.userId, t.ticker)]);
 
 export const referrals = pgTable('referrals', {
     id: text('id').primaryKey(),

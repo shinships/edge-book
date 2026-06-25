@@ -11,8 +11,11 @@ import { TradeService } from './services/trade.service';
 import { ReportService } from './services/report.service';
 import { ThesisService, ThesisItem } from './services/thesis.service';
 import { MarketService } from './services/market.service';
-import { AlertService } from './services/alert.service';
+import { VnStockService } from './services/vn-stock.service';
+import { MarketRouter } from './services/market-router';
+import { AlertService, AlertType, AlertItem } from './services/alert.service';
 import { WatchlistService } from './services/watchlist.service';
+import { PortfolioService } from './services/portfolio.service';
 import { DisciplineService } from './services/discipline.service';
 import { GrowthService } from './services/growth.service';
 import { ReferralService } from './services/referral.service';
@@ -32,8 +35,11 @@ const tradeService = new TradeService();
 const reportService = new ReportService();
 const thesisService = new ThesisService();
 const marketService = new MarketService();
+const vnStockService = new VnStockService();
+const marketRouter = new MarketRouter(marketService, vnStockService);
 const alertService = new AlertService();
 const watchlistService = new WatchlistService();
+const portfolioService = new PortfolioService();
 const disciplineService = new DisciplineService();
 const growthService = new GrowthService();
 const referralService = new ReferralService();
@@ -88,19 +94,54 @@ function formatPrice(value: number): string {
     return `${value}`;
 }
 
+// Market-aware price format. VN stock prices are in thousand-VND units (e.g. 24.35 =
+// 24,350đ) so the crypto "k" compaction is wrong for them — show 2 trimmed decimals.
+function formatPriceMkt(value: number, market?: 'crypto' | 'vn'): string {
+    if (market === 'vn') {
+        return value.toFixed(2).replace(/\.?0+$/, '');
+    }
+    return formatPrice(value);
+}
+
+// Compact a raw VND amount to a tỷ/triệu string (foreign flow, portfolio NAV/P&L).
+function fmtVnd(value: number): string {
+    const abs = Math.abs(value);
+    if (abs >= 1e9) return `${(value / 1e9).toFixed(1)} tỷ`;
+    if (abs >= 1e6) return `${(value / 1e6).toFixed(0)} tr`;
+    return `${Math.round(value)}`;
+}
+
+// Market-aware money amount (portfolio cost / value / P&L). VN money values are carried
+// in thousand-VND units (shares × thousand-VND price) → ×1000 to get VND for fmtVnd.
+function fmtMoney(value: number, market: 'crypto' | 'vn'): string {
+    if (market === 'vn') return `${fmtVnd(value * 1000)}đ`;
+    return `$${formatPrice(value)}`;
+}
+
+// Short human label for an alert (price alerts show the price; VN alerts their condition).
+function describeAlert(a: AlertItem): string {
+    switch (a.alertType) {
+        case 'foreign': return `${a.ticker} khối ngoại ${a.condition === 'above' ? 'mua ròng' : 'bán ròng'}`;
+        case 'volume': return `${a.ticker} volume ≥ ${a.targetPrice}x TB20`;
+        case 'rsi': return `${a.ticker} RSI ${a.condition === 'above' ? '>' : '<'} ${a.targetPrice}`;
+        case 'macross': return `${a.ticker} MA20×MA50`;
+        default: return `${a.ticker} ${a.condition === 'above' ? '>' : '<'} ${formatPriceMkt(a.targetPrice, marketRouter.classify(a.ticker))}`;
+    }
+}
+
 // Best-effort live-price block for digests. Returns '' on any failure so the
 // digest always sends, with or without prices.
 async function buildPriceBlock(tickers: string[]): Promise<string> {
     try {
         const top = tickers.slice(0, 5);
         if (top.length === 0) return '';
-        const stats = await marketService.get24hStats(top);
+        const stats = await marketRouter.get24hStats(top);
         const lines = top
             .map((t) => {
                 const s = stats.get(t);
                 if (!s) return null;
                 const e = s.changePercent >= 0 ? '🟢' : '🔴';
-                return `${e} ${t}: ${formatPrice(s.price)} (${fmtPct(Math.round(s.changePercent * 10) / 10)})`;
+                return `${e} ${t}: ${formatPriceMkt(s.price, s.market)} (${fmtPct(Math.round(s.changePercent * 10) / 10)})`;
             })
             .filter((l): l is string => l !== null);
         return lines.length > 0 ? `\n\n💹 Giá hiện tại:\n${lines.join('\n')}` : '';
@@ -438,12 +479,19 @@ bot.command('help', (ctx) => {
         '• Review → đối soát quy trình các lệnh đóng hôm nay\n' +
         '• Thua lệnh → bot hỏi có tuân thủ kế hoạch, nhắc giảm 50% size\n' +
         '\n' +
-        '💹 Market & Alerts (giá crypto live qua Binance)\n' +
-        '• Watch: BTC · Unwatch: BTC (free 3 ticker, Pro+ không giới hạn)\n' +
-        '• Watchlist → giá live + thay đổi 24h từng ticker\n' +
-        '• Alert: BTC > 70k · Alert: ETH < 2400 (Pro 10 alert, Premium unlimited)\n' +
-        '• Bot check giá mỗi phút, báo ngay khi chạm\n' +
+        '💹 Market & Alerts (crypto qua Binance, cổ phiếu VN qua VNDirect)\n' +
+        '• Watch: BTC · Watch: HPG · Unwatch: ... (free 3 ticker, Pro+ không giới hạn)\n' +
+        '• Watchlist → giá live + thay đổi; mã VN kèm P/E + khối ngoại\n' +
+        '• Alert: BTC > 70k · Alert: HPG > 30 (Pro 10 alert, Premium unlimited)\n' +
+        '• Alert VN (cuối phiên): HPG foreign buy · HPG volume 2x · HPG rsi > 70 · HPG ma cross\n' +
+        '• Bot check giá mỗi phút (mã VN: foreign/volume/RSI/MA soát cuối phiên)\n' +
         '• Alerts → xem & xoá alerts đang chạy\n' +
+        '\n' +
+        '📊 Danh mục đầu tư (Pro)\n' +
+        '• Buy: HPG 1000 @ 25.5 → thêm/bình quân giá vị thế\n' +
+        '• Sell: HPG 500 @ 28 → bán bớt, chốt lãi/lỗ\n' +
+        '• Portfolio (Danh mục) → định giá live, lãi/lỗ, tỷ trọng\n' +
+        '• Position: HPG → chi tiết một mã\n' +
         '\n' +
         '💳 Tài khoản\n' +
         '• /plan · /upgrade\n' +
@@ -1375,6 +1423,61 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
+    // VN stock alerts (Pro, evaluated end-of-day): khối ngoại / volume / RSI / MA cross.
+    // Matched BEFORE the generic price alert so multi-token forms aren't misparsed.
+    {
+        let parsed: { type: AlertType; condition: 'above' | 'below'; target: number; rawTicker: string; desc: string } | null = null;
+        let m: RegExpMatchArray | null;
+        if ((m = text.match(/^alert:\s*(\S+)\s+foreign\s+(buy|sell)\s*$/i))) {
+            const buy = m[2].toLowerCase() === 'buy';
+            parsed = { type: 'foreign', rawTicker: m[1], condition: buy ? 'above' : 'below', target: 0, desc: `khối ngoại ${buy ? 'mua ròng' : 'bán ròng'}` };
+        } else if ((m = text.match(/^alert:\s*(\S+)\s+vol(?:ume)?\s+(\d+(?:\.\d+)?)x?\s*$/i))) {
+            parsed = { type: 'volume', rawTicker: m[1], condition: 'above', target: parseFloat(m[2]), desc: `volume ≥ ${parseFloat(m[2])}x TB20 phiên` };
+        } else if ((m = text.match(/^alert:\s*(\S+)\s+rsi\s*([<>])\s*(\d+(?:\.\d+)?)\s*$/i))) {
+            parsed = { type: 'rsi', rawTicker: m[1], condition: m[2] === '>' ? 'above' : 'below', target: parseFloat(m[3]), desc: `RSI(14) ${m[2]} ${parseFloat(m[3])}` };
+        } else if ((m = text.match(/^alert:\s*(\S+)\s+ma\s*cross\s*$/i))) {
+            parsed = { type: 'macross', rawTicker: m[1], condition: 'above', target: 0, desc: 'MA20 cắt MA50 (golden/death)' };
+        }
+        if (parsed) {
+            const limits = await planService.getLimits(userId);
+            if (limits.maxActiveAlerts === 0) {
+                await ctx.reply('🔒 Price Alerts là tính năng Pro. Gõ /upgrade để nâng cấp!');
+                return;
+            }
+            if (!isValidTicker(parsed.rawTicker)) {
+                await ctx.reply(`⚠️ Ticker "${parsed.rawTicker}" không hợp lệ. Ví dụ: HPG, FPT, SSI`);
+                return;
+            }
+            const ticker = parsed.rawTicker.toUpperCase();
+            if (marketRouter.classify(ticker) !== 'vn') {
+                await ctx.reply('⚠️ Alert khối ngoại/volume/RSI/MA chỉ áp dụng cho cổ phiếu VN (vd HPG, FPT).');
+                return;
+            }
+            if (parsed.type === 'volume' && parsed.target <= 0) {
+                await ctx.reply('⚠️ Hệ số volume không hợp lệ. Ví dụ: Alert: HPG volume 2x');
+                return;
+            }
+            if (parsed.type === 'rsi' && (parsed.target <= 0 || parsed.target > 100)) {
+                await ctx.reply('⚠️ Ngưỡng RSI phải trong 1-100. Ví dụ: Alert: HPG rsi > 70');
+                return;
+            }
+            if (limits.maxActiveAlerts !== -1 && await alertService.countActive(userId) >= limits.maxActiveAlerts) {
+                await ctx.reply(`⚠️ Đã đạt giới hạn ${limits.maxActiveAlerts} alerts. Xoá bớt (gõ Alerts) hoặc /upgrade lên Premium.`);
+                return;
+            }
+            const alert = await alertService.addAlert(userId, ticker, parsed.condition, parsed.target, parsed.type);
+            if (!alert) {
+                await ctx.reply('⚠️ Không thể tạo alert. Vui lòng thử lại.');
+                return;
+            }
+            await ctx.reply(
+                `🔔 Đã đặt alert ${ticker}: ${parsed.desc}.\n` +
+                `Bot kiểm tra sau giờ đóng cửa (≈15:15) mỗi phiên và báo khi thoả.`
+            );
+            return;
+        }
+    }
+
     // Alert: BTC > 70k  |  Alert: ETH < 2400  (Pro)
     const alertMatch = text.match(/^alert:\s*(\S+)\s*([<>])\s*(\S+)\s*$/i);
     if (alertMatch) {
@@ -1385,13 +1488,13 @@ bot.on('message:text', async (ctx) => {
         }
         const rawTicker = alertMatch[1];
         if (!isValidTicker(rawTicker)) {
-            await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: BTC, ETH, SOL`);
+            await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: BTC, ETH, HPG, FPT`);
             return;
         }
         const ticker = rawTicker.toUpperCase();
         const target = parsePrice(alertMatch[3]);
         if (target === undefined) {
-            await ctx.reply('⚠️ Giá target không hợp lệ. Ví dụ: Alert: BTC > 70k');
+            await ctx.reply('⚠️ Giá target không hợp lệ. Ví dụ: Alert: BTC > 70k hoặc Alert: HPG > 30');
             return;
         }
         if (limits.maxActiveAlerts !== -1 && await alertService.countActive(userId) >= limits.maxActiveAlerts) {
@@ -1407,16 +1510,16 @@ bot.on('message:text', async (ctx) => {
         // Best-effort: echo current price and warn if condition is already met.
         let extra = '';
         try {
-            const prices = await marketService.getPrices([ticker]);
+            const prices = await marketRouter.getPrices([ticker]);
             const cur = prices.get(ticker);
             if (cur !== undefined) {
                 const alreadyHit = condition === 'above' ? cur >= target : cur <= target;
-                extra = `\nGiá hiện tại: ${formatPrice(cur)}` +
+                extra = `\nGiá hiện tại: ${formatPriceMkt(cur, marketRouter.classify(ticker))}` +
                     (alreadyHit ? '\n⚠️ Điều kiện đã thoả ngay bây giờ, alert sẽ kích hoạt ở lần check tới.' : '');
             }
         } catch { /* ignore */ }
         await ctx.reply(
-            `🔔 Đã đặt alert ${ticker} ${condition === 'above' ? '>' : '<'} ${formatPrice(target)}.\n` +
+            `🔔 Đã đặt alert ${ticker} ${condition === 'above' ? '>' : '<'} ${formatPriceMkt(target, marketRouter.classify(ticker))}.\n` +
             `Bot check giá mỗi phút và báo khi chạm.${extra}`
         );
         return;
@@ -1437,7 +1540,7 @@ bot.on('message:text', async (ctx) => {
         const keyboard = new InlineKeyboard();
         active.forEach((a) => {
             keyboard.text(
-                `🗑 ${a.ticker} ${a.condition === 'above' ? '>' : '<'} ${formatPrice(a.targetPrice)}`,
+                `🗑 ${describeAlert(a)}`,
                 `alertdel:${a.id}`
             ).row();
         });
@@ -1450,7 +1553,7 @@ bot.on('message:text', async (ctx) => {
     if (watchMatch) {
         const rawTicker = watchMatch[1];
         if (!isValidTicker(rawTicker)) {
-            await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: BTC, ETH, SOL`);
+            await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: BTC, ETH, HPG, FPT`);
             return;
         }
         const ticker = rawTicker.toUpperCase();
@@ -1475,22 +1578,193 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    // Watchlist — live price + 24h change for each ticker
+    // Watchlist — live price + change for each ticker (crypto via Binance, VN via VNDirect)
     if (text.toLowerCase() === 'watchlist') {
         const tickers = await watchlistService.getWatchlist(userId);
         if (tickers.length === 0) {
-            await ctx.reply('💹 Watchlist trống. Thêm ticker: Watch: BTC');
+            await ctx.reply('💹 Watchlist trống. Thêm ticker: Watch: BTC hoặc Watch: HPG');
             return;
         }
         await ctx.replyWithChatAction('typing');
-        const stats = await marketService.get24hStats(tickers);
+        const stats = await marketRouter.get24hStats(tickers);
+
+        // Enrich VN tickers with P/E + foreign net flow (best-effort, parallel; finfo host
+        // may be unreachable in some environments → simply omitted when null).
+        const vnExtras = new Map<string, string>();
+        await Promise.all(
+            tickers
+                .filter((t) => marketRouter.classify(t) === 'vn')
+                .map(async (t) => {
+                    const [f, fund] = await Promise.all([
+                        vnStockService.getForeignFlow(t),
+                        vnStockService.getFundamentals(t),
+                    ]);
+                    const parts: string[] = [];
+                    if (fund?.pe !== undefined) parts.push(`P/E ${fund.pe.toFixed(1)}`);
+                    if (f) parts.push(`NN ${f.netValue >= 0 ? '+' : ''}${fmtVnd(f.netValue)}`);
+                    if (parts.length) vnExtras.set(t, `  (${parts.join(' · ')})`);
+                })
+        );
+
         const lines = tickers.map((t) => {
             const s = stats.get(t);
-            if (!s) return `⚪ ${t}: n/a (không có trên Binance)`;
+            if (!s) return `⚪ ${t}: n/a`;
             const e = s.changePercent >= 0 ? '🟢' : '🔴';
-            return `${e} ${t}: ${formatPrice(s.price)} (${fmtPct(Math.round(s.changePercent * 10) / 10)})`;
+            return `${e} ${t}: ${formatPriceMkt(s.price, s.market)} (${fmtPct(Math.round(s.changePercent * 10) / 10)})${vnExtras.get(t) ?? ''}`;
         });
         await ctx.reply(`💹 Watchlist\n${lines.join('\n')}`);
+        return;
+    }
+
+    // Buy: HPG 1000 @ 25.5 — add/average-in a portfolio position (Pro+)
+    const buyMatch = text.match(/^buy:\s*(\S+)\s+(\d+(?:\.\d+)?)\s*@\s*(\S+)\s*$/i);
+    if (buyMatch) {
+        if (!await planService.canUse(userId, 'canPortfolio')) {
+            await ctx.reply('🔒 Portfolio (danh mục) là tính năng Pro. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const rawTicker = buyMatch[1];
+        if (!isValidTicker(rawTicker)) {
+            await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: Buy: HPG 1000 @ 25.5`);
+            return;
+        }
+        const ticker = rawTicker.toUpperCase();
+        const qty = parseFloat(buyMatch[2]);
+        const price = parsePrice(buyMatch[3]);
+        if (!Number.isFinite(qty) || qty <= 0 || price === undefined) {
+            await ctx.reply('⚠️ Số lượng/giá không hợp lệ. Ví dụ: Buy: HPG 1000 @ 25.5');
+            return;
+        }
+        const market = marketRouter.classify(ticker);
+        const pos = await portfolioService.buy(userId, ticker, qty, price, market);
+        if (!pos) {
+            await ctx.reply('⚠️ Không thể ghi nhận giao dịch. Vui lòng thử lại.');
+            return;
+        }
+        await ctx.reply(
+            `✅ Đã mua ${qty} ${ticker} @ ${formatPriceMkt(price, market)}.\n` +
+            `Vị thế: ${pos.quantity} ${ticker}, giá vốn TB ${formatPriceMkt(pos.avgCost, market)} ` +
+            `(vốn ${fmtMoney(pos.quantity * pos.avgCost, market)}).\n` +
+            `Gõ Portfolio để xem định giá live.`
+        );
+        return;
+    }
+
+    // Sell: HPG 500 @ 28 — reduce/close a position, book realized PnL (Pro+)
+    const sellMatch = text.match(/^sell:\s*(\S+)\s+(\d+(?:\.\d+)?)\s*@\s*(\S+)\s*$/i);
+    if (sellMatch) {
+        if (!await planService.canUse(userId, 'canPortfolio')) {
+            await ctx.reply('🔒 Portfolio (danh mục) là tính năng Pro. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const ticker = sellMatch[1].toUpperCase();
+        const qty = parseFloat(sellMatch[2]);
+        const price = parsePrice(sellMatch[3]);
+        if (!Number.isFinite(qty) || qty <= 0 || price === undefined) {
+            await ctx.reply('⚠️ Số lượng/giá không hợp lệ. Ví dụ: Sell: HPG 500 @ 28');
+            return;
+        }
+        const existing = await portfolioService.getPosition(userId, ticker);
+        if (!existing) {
+            await ctx.reply(`⚠️ Bạn chưa có vị thế ${ticker} trong danh mục.`);
+            return;
+        }
+        const market = existing.market;
+        const res = await portfolioService.sell(userId, ticker, qty, price);
+        if (!res) {
+            await ctx.reply('⚠️ Không thể ghi nhận giao dịch. Vui lòng thử lại.');
+            return;
+        }
+        const sign = res.realized >= 0 ? '+' : '';
+        const pnlEmoji = res.realized >= 0 ? '🟢' : '🔴';
+        await ctx.reply(
+            `✅ Đã bán ${Math.min(qty, existing.quantity)} ${ticker} @ ${formatPriceMkt(price, market)}.\n` +
+            `${pnlEmoji} Lãi/lỗ thực hiện: ${sign}${fmtMoney(res.realized, market)}\n` +
+            (res.closed
+                ? `Đã đóng toàn bộ vị thế ${ticker}.`
+                : `Còn lại: ${res.remaining} ${ticker} (giá vốn TB ${formatPriceMkt(res.avgCost, market)}).`)
+        );
+        return;
+    }
+
+    // Portfolio / Danh mục — live valuation (Pro+)
+    if (text.toLowerCase() === 'portfolio' || text.toLowerCase() === 'danh mục' || text.toLowerCase() === 'danh muc') {
+        if (!await planService.canUse(userId, 'canPortfolio')) {
+            await ctx.reply('🔒 Portfolio (danh mục) là tính năng Pro. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const positions = await portfolioService.getPositions(userId);
+        if (positions.length === 0) {
+            await ctx.reply('📊 Danh mục trống. Thêm vị thế: Buy: HPG 1000 @ 25.5');
+            return;
+        }
+        await ctx.replyWithChatAction('typing');
+        const prices = await marketRouter.getPrices(positions.map((p) => p.ticker));
+        const val = await portfolioService.valuate(userId, prices);
+
+        const lines = val.positions.map((p) => {
+            const head = `${p.ticker}: ${p.quantity} @ ${formatPriceMkt(p.avgCost, p.market)}`;
+            if (p.marketValue === undefined) return `⚪ ${head} → giá n/a`;
+            const e = (p.unrealizedPnl ?? 0) >= 0 ? '🟢' : '🔴';
+            const sign = (p.unrealizedPnl ?? 0) >= 0 ? '+' : '';
+            return `${e} ${head} → ${formatPriceMkt(p.price!, p.market)} ` +
+                `(${sign}${p.unrealizedPct}%, ${sign}${fmtMoney(p.unrealizedPnl!, p.market)})` +
+                (p.weight !== undefined ? ` · ${p.weight}%` : '');
+        });
+
+        const totalLines: string[] = [];
+        for (const mk of ['vn', 'crypto'] as const) {
+            const t = val.byMarket[mk];
+            if (!t) continue;
+            const label = mk === 'vn' ? '🇻🇳 Cổ phiếu VN' : '🪙 Crypto';
+            const sign = t.unrealizedPnl >= 0 ? '+' : '';
+            const pct = t.cost > 0 ? Math.round((t.unrealizedPnl / t.cost) * 1000) / 10 : 0;
+            totalLines.push(
+                `${label}: NAV ${fmtMoney(t.marketValue, mk)}${t.priced ? '' : ' (một phần n/a)'} · ` +
+                `Lãi/lỗ ${sign}${fmtMoney(t.unrealizedPnl, mk)} (${sign}${pct}%)` +
+                (t.realizedPnl !== 0 ? ` · Đã chốt ${t.realizedPnl >= 0 ? '+' : ''}${fmtMoney(t.realizedPnl, mk)}` : '')
+            );
+        }
+
+        await ctx.reply(`📊 Danh mục\n${lines.join('\n')}\n\n${totalLines.join('\n')}`);
+        return;
+    }
+
+    // Position: HPG — single-position detail (Pro+)
+    const posMatch = text.match(/^position:\s*(\S+)\s*$/i);
+    if (posMatch) {
+        if (!await planService.canUse(userId, 'canPortfolio')) {
+            await ctx.reply('🔒 Portfolio (danh mục) là tính năng Pro. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const ticker = posMatch[1].toUpperCase();
+        const pos = await portfolioService.getPosition(userId, ticker);
+        if (!pos) {
+            await ctx.reply(`⚠️ Bạn chưa có vị thế ${ticker}. Thêm: Buy: ${ticker} 1000 @ 25.5`);
+            return;
+        }
+        await ctx.replyWithChatAction('typing');
+        const prices = await marketRouter.getPrices([ticker]);
+        const cur = prices.get(ticker);
+        const cost = pos.quantity * pos.avgCost;
+        let body = `📊 ${ticker} (${pos.market === 'vn' ? 'CK Việt Nam' : 'Crypto'})\n` +
+            `Số lượng: ${pos.quantity}\n` +
+            `Giá vốn TB: ${formatPriceMkt(pos.avgCost, pos.market)} (tổng vốn ${fmtMoney(cost, pos.market)})\n`;
+        if (cur !== undefined) {
+            const mv = pos.quantity * cur;
+            const pnl = mv - cost;
+            const pct = cost > 0 ? Math.round((pnl / cost) * 1000) / 10 : 0;
+            const e = pnl >= 0 ? '🟢' : '🔴';
+            const sign = pnl >= 0 ? '+' : '';
+            body += `Giá hiện tại: ${formatPriceMkt(cur, pos.market)}\n` +
+                `${e} Giá trị: ${fmtMoney(mv, pos.market)} (${sign}${fmtMoney(pnl, pos.market)}, ${sign}${pct}%)\n`;
+        } else {
+            body += `Giá hiện tại: n/a\n`;
+        }
+        if (pos.realizedPnl !== 0) {
+            body += `Đã chốt lãi/lỗ: ${pos.realizedPnl >= 0 ? '+' : ''}${fmtMoney(pos.realizedPnl, pos.market)}`;
+        }
+        await ctx.reply(body.trimEnd());
         return;
     }
 
@@ -1785,11 +2059,13 @@ cron.schedule('* * * * *', async () => {
     if (alertCronBusy) return; // skip if a previous run is still in flight
     alertCronBusy = true;
     try {
-        const active = await alertService.getAllActive();
+        // Only price alerts are intraday-evaluated here; VN foreign/volume/rsi/macross
+        // run in the EOD cron below.
+        const active = (await alertService.getAllActive()).filter((a) => a.alertType === 'price');
         if (active.length === 0) return;
 
         const tickers = [...new Set(active.map((a) => a.ticker))];
-        const prices = await marketService.getPrices(tickers);
+        const prices = await marketRouter.getPrices(tickers);
 
         for (const a of active) {
             const price = prices.get(a.ticker);
@@ -1802,8 +2078,8 @@ cron.schedule('* * * * *', async () => {
             try {
                 await bot.api.sendMessage(
                     a.userId,
-                    `🔔 Price Alert: ${a.ticker} đã ${a.condition === 'above' ? 'vượt' : 'thủng'} ${formatPrice(a.targetPrice)}\n` +
-                    `Giá hiện tại: ${formatPrice(price)}`
+                    `🔔 Price Alert: ${a.ticker} đã ${a.condition === 'above' ? 'vượt' : 'thủng'} ${formatPriceMkt(a.targetPrice, marketRouter.classify(a.ticker))}\n` +
+                    `Giá hiện tại: ${formatPriceMkt(price, marketRouter.classify(a.ticker))}`
                 );
             } catch (e) {
                 console.error(`[Alerts] send failed for user ${a.userId}:`, e);
@@ -1814,6 +2090,115 @@ cron.schedule('* * * * *', async () => {
         console.error('[Alerts] cron error:', e);
     } finally {
         alertCronBusy = false;
+    }
+}, {
+    timezone: 'Asia/Ho_Chi_Minh',
+});
+
+// --- VN STOCK EOD ALERT HELPERS + CRON ---
+
+// Simple moving average of the last `period` values; null if not enough data.
+function sma(values: number[], period: number): number | null {
+    if (values.length < period) return null;
+    const slice = values.slice(-period);
+    return slice.reduce((a, b) => a + b, 0) / period;
+}
+
+// Wilder's RSI over closing prices; null if not enough data. Returns 0-100.
+function computeRSI(closes: number[], period = 14): number | null {
+    if (closes.length < period + 1) return null;
+    let gain = 0;
+    let loss = 0;
+    for (let i = 1; i <= period; i++) {
+        const d = closes[i] - closes[i - 1];
+        if (d >= 0) gain += d; else loss -= d;
+    }
+    let avgGain = gain / period;
+    let avgLoss = loss / period;
+    for (let i = period + 1; i < closes.length; i++) {
+        const d = closes[i] - closes[i - 1];
+        avgGain = (avgGain * (period - 1) + Math.max(d, 0)) / period;
+        avgLoss = (avgLoss * (period - 1) + Math.max(-d, 0)) / period;
+    }
+    if (avgLoss === 0) return 100;
+    const rs = avgGain / avgLoss;
+    return 100 - 100 / (1 + rs);
+}
+
+// Evaluate a single EOD alert against fresh VN data. Returns a trigger message, or null
+// if the condition isn't met (or data is unavailable — best-effort, never throws).
+async function evaluateEodAlert(a: AlertItem): Promise<string | null> {
+    try {
+        if (a.alertType === 'foreign') {
+            const f = await vnStockService.getForeignFlow(a.ticker);
+            if (!f) return null;
+            const netBuy = f.netValue > 0;
+            const hit = a.condition === 'above' ? netBuy : f.netValue < 0;
+            if (!hit) return null;
+            return `🔔 ${a.ticker}: khối ngoại ${netBuy ? 'MUA' : 'BÁN'} ròng ${fmtVnd(Math.abs(f.netValue))}đ phiên gần nhất.`;
+        }
+        if (a.alertType === 'volume') {
+            const bars = await vnStockService.getDailyBars(a.ticker, 25);
+            if (bars.length < 21) return null;
+            const today = bars[bars.length - 1];
+            const prior = bars.slice(-21, -1).map((b) => b.v);
+            const avg = sma(prior, 20);
+            if (avg === null || avg <= 0) return null;
+            const mult = today.v / avg;
+            if (mult < a.targetPrice) return null;
+            return `🔔 ${a.ticker}: volume phiên gần nhất gấp ${mult.toFixed(1)}x trung bình 20 phiên (ngưỡng ${a.targetPrice}x).`;
+        }
+        if (a.alertType === 'rsi') {
+            const bars = await vnStockService.getDailyBars(a.ticker, 40);
+            const rsi = computeRSI(bars.map((b) => b.c), 14);
+            if (rsi === null) return null;
+            const hit = a.condition === 'above' ? rsi >= a.targetPrice : rsi <= a.targetPrice;
+            if (!hit) return null;
+            return `🔔 ${a.ticker}: RSI(14) = ${rsi.toFixed(1)} (${a.condition === 'above' ? '≥' : '≤'} ${a.targetPrice}).`;
+        }
+        if (a.alertType === 'macross') {
+            const bars = await vnStockService.getDailyBars(a.ticker, 60);
+            const closes = bars.map((b) => b.c);
+            const ma20 = sma(closes, 20);
+            const ma50 = sma(closes, 50);
+            const ma20p = sma(closes.slice(0, -1), 20);
+            const ma50p = sma(closes.slice(0, -1), 50);
+            if (ma20 === null || ma50 === null || ma20p === null || ma50p === null) return null;
+            const golden = ma20p <= ma50p && ma20 > ma50;
+            const death = ma20p >= ma50p && ma20 < ma50;
+            if (!golden && !death) return null;
+            return `🔔 ${a.ticker}: ${golden ? 'GOLDEN CROSS 🟢 (MA20 cắt lên MA50)' : 'DEATH CROSS 🔴 (MA20 cắt xuống MA50)'}.`;
+        }
+    } catch (e) {
+        console.error(`[VnAlerts] evaluate failed for ${a.ticker} (${a.alertType}):`, e);
+    }
+    return null;
+}
+
+// --- VN EOD ALERT CRON (15:15 ICT, weekdays — after HOSE/HNX close) ---
+let vnAlertCronBusy = false;
+cron.schedule('15 15 * * 1-5', async () => {
+    if (vnAlertCronBusy) return;
+    vnAlertCronBusy = true;
+    console.log('[VnAlerts] Running EOD VN alert cron...');
+    try {
+        const active = (await alertService.getAllActive()).filter((a) => a.alertType !== 'price');
+        for (const a of active) {
+            const msg = await evaluateEodAlert(a);
+            if (!msg) continue;
+            // Mark triggered BEFORE sending so a send failure can't re-fire forever.
+            await alertService.markTriggered(a.id);
+            try {
+                await bot.api.sendMessage(a.userId, msg);
+            } catch (e) {
+                console.error(`[VnAlerts] send failed for user ${a.userId}:`, e);
+            }
+            await new Promise((r) => setTimeout(r, 150)); // Telegram rate-limit cushion
+        }
+    } catch (e) {
+        console.error('[VnAlerts] cron error:', e);
+    } finally {
+        vnAlertCronBusy = false;
     }
 }, {
     timezone: 'Asia/Ho_Chi_Minh',

@@ -6,6 +6,7 @@ export interface Ticker24h {
     ticker: string;
     price: number;
     changePercent: number;
+    market?: 'crypto' | 'vn'; // source market; undefined treated as crypto for back-compat
 }
 
 const BINANCE_BASE = 'https://api.binance.com/api/v3';
