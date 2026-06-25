@@ -2,12 +2,16 @@ import { db } from '../db';
 import { alerts } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 
+export type AlertType = 'price' | 'foreign' | 'volume' | 'rsi' | 'macross';
+
 export interface AlertItem {
     id: string;
     userId: number;
     ticker: string;
     condition: 'above' | 'below';
     targetPrice: number;
+    alertType: AlertType;
+    params?: Record<string, any>;
     status: 'active' | 'triggered';
     createdAt: string;
     triggeredAt?: string;
@@ -22,6 +26,8 @@ function toItem(row: AlertRow): AlertItem {
         ticker: row.ticker,
         condition: row.condition as 'above' | 'below',
         targetPrice: row.targetPrice,
+        alertType: (row.alertType as AlertType) ?? 'price',
+        params: row.params ?? undefined,
         status: row.status as 'active' | 'triggered',
         createdAt: row.createdAt.toISOString(),
         triggeredAt: row.triggeredAt?.toISOString(),
@@ -37,15 +43,21 @@ export class AlertService {
         userId: number,
         ticker: string,
         condition: 'above' | 'below',
-        targetPrice: number
+        targetPrice: number,
+        alertType: AlertType = 'price',
+        params?: Record<string, any>
     ): Promise<AlertItem | null> {
-        if (!Number.isFinite(targetPrice) || targetPrice <= 0) return null;
+        // Price/volume/rsi carry a positive threshold; foreign/macross use targetPrice=0.
+        if (!Number.isFinite(targetPrice) || targetPrice < 0) return null;
+        if (alertType === 'price' && targetPrice <= 0) return null;
         const [row] = await db.insert(alerts).values({
             id: this.generateId(),
             userId,
             ticker: ticker.toUpperCase(),
             condition,
             targetPrice,
+            alertType,
+            params,
             status: 'active',
             createdAt: new Date(),
         }).returning();

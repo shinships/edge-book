@@ -30,6 +30,7 @@ export interface PlanLimits {
     canLinkResearch: boolean;
     canAnalytics: boolean;
     canThesis: boolean;
+    canPortfolio: boolean;
     maxDocs: number;
     maxWatchlist: number;     // -1 = unlimited
     maxActiveAlerts: number;  // 0 = feature locked, -1 = unlimited
@@ -48,6 +49,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canLinkResearch: false,
         canAnalytics: false,
         canThesis: false,
+        canPortfolio: false,
         maxDocs: 1,
         maxWatchlist: 3,
         maxActiveAlerts: 0,
@@ -64,6 +66,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canLinkResearch: false,
         canAnalytics: false,
         canThesis: false,
+        canPortfolio: true,
         maxDocs: 5,
         maxWatchlist: -1,
         maxActiveAlerts: 10,
@@ -80,6 +83,7 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
         canLinkResearch: true,
         canAnalytics: true,
         canThesis: true,
+        canPortfolio: true,
         maxDocs: -1,
         maxWatchlist: -1,
         maxActiveAlerts: -1,

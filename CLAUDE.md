@@ -18,7 +18,7 @@
 | AI           | Vertex-Key.com (`openai` SDK) via OpenAI-compatible API — chat `AI_CHAT_MODEL` (default `aws/claude-sonnet-4-6-medium`), fast `AI_FAST_MODEL` (default `free/claude-haiku-4-5`) |
 | Database     | **PostgreSQL (Supabase)** via **Drizzle ORM** (`drizzle-orm` + `postgres` driver); schema in `src/db/schema.ts`, migrations via `drizzle-kit` |
 | Google APIs  | `googleapis` (Calendar v3, Drive v3, Docs v1) |
-| Market data  | Binance public REST API (no key) — live prices & 24h stats for Alerts/Watchlist (`market.service.ts`) |
+| Market data  | Crypto: Binance public REST API (`market.service.ts`). VN stocks: VNDirect public API (`vn-stock.service.ts`) — dchart-api for price/bars, finfo-api for foreign flow + fundamentals. Routed per-ticker by `market-router.ts`. No keys. |
 | PDF          | `pdfkit` — trade report export (ASCII/English text; built-in fonts can't render VN diacritics) |
 | Auth         | Google Service Account (`service_account.json`) |
 | Config       | `dotenv` (`.env` file)                        |
@@ -50,7 +50,7 @@ edge-book/
 │   ├── webhook.server.ts       # Express HTTP server for payment webhooks (LemonSqueezy + SePay)
 │   ├── db/
 │   │   ├── index.ts            # postgres client + drizzle instance (exits if DATABASE_URL missing)
-│   │   └── schema.ts           # Drizzle schema: users, plans, research_items, trades, theses, alerts, watchlist_items, discipline_state, todos
+│   │   └── schema.ts           # Drizzle schema: users, plans, research_items, trades, theses, alerts, watchlist_items, portfolio_positions, discipline_state, referrals, todos
 │   ├── scripts/
 │   │   └── migrate-json-to-db.ts # One-time seed: legacy data/*.json → Postgres (`npm run db:seed`)
 │   ├── services/
@@ -59,8 +59,11 @@ edge-book/
 │   │   ├── discipline.service.ts # Discipline mode: loss streak, daily loss limit, cooldown (Sprint 9)
 │   │   ├── google.service.ts   # Calendar, Drive, Docs API wrappers
 │   │   ├── market.service.ts   # Binance public API: batch prices + 24h stats, 45s cache, never throws
+│   │   ├── vn-stock.service.ts # VNDirect public API: VN stock price/bars (dchart) + foreign flow & fundamentals (finfo); cached, never throws
+│   │   ├── market-router.ts    # Routes each ticker to crypto (Binance) or VN (VNDirect) and merges results behind getPrices/get24hStats
 │   │   ├── payment.service.ts  # LemonSqueezy checkout creation, HMAC verify, upgrade logic
 │   │   ├── plan.service.ts     # Subscription tier tracking & feature gating
+│   │   ├── portfolio.service.ts # Portfolio position ledger: buy/avg-in, sell+realized PnL, live valuation (Pro+)
 │   │   ├── report.service.ts   # PDF trade report generation via pdfkit (Premium export)
 │   │   ├── research.service.ts # Research items: auto-tagging, search, star, digest data
 │   │   ├── sepay.service.ts    # SePay VietQR bank-transfer: QR generation, webhook auth/parse, upgrade logic (Sprint 10)
@@ -235,6 +238,8 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 | Export | ❌ | ❌ | ✅ |
 | Watchlist | 3 tickers | Unlimited | Unlimited |
 | Price Alerts | ❌ | 10 active | Unlimited |
+| VN Alerts (foreign/volume/RSI/MA) | ❌ | ✅ | ✅ |
+| Portfolio (danh mục) | ❌ | ✅ | ✅ |
 | Max Docs | 1 | 5 | Unlimited |
 
 > **Admin override:** Telegram user IDs in `ADMIN_USER_IDS` (`.env`) are always treated as **Premium** regardless of stored plan — every gate passes, unlimited forwards, always digest-eligible. See `PlanService.isAdmin()` / `effectiveTier()`.
@@ -256,7 +261,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 
 ### Data Persistence
 
-All data lives in **PostgreSQL (Supabase)** via **Drizzle ORM** — schema in `src/db/schema.ts` (9 tables: `users`, `plans`, `research_items`, `trades`, `theses`, `alerts`, `watchlist_items`, `discipline_state`, `todos`), connection in `src/db/index.ts` (`postgres` driver + `DATABASE_URL`). All service methods are **async**.
+All data lives in **PostgreSQL (Supabase)** via **Drizzle ORM** — schema in `src/db/schema.ts` (`users`, `plans`, `research_items`, `trades`, `theses`, `alerts`, `watchlist_items`, `portfolio_positions`, `discipline_state`, `referrals`, `todos`), connection in `src/db/index.ts` (`postgres` driver + `DATABASE_URL`). All service methods are **async**.
 
 - Legacy JSON files in `data/` are no longer read at runtime — they were the pre-Sprint-7 store and remain only as the seed source for `npm run db:seed` (`src/scripts/migrate-json-to-db.ts`).
 - DB migration removed the old "single instance for data safety" constraint; the remaining single-instance limit is Telegram long-polling (one `getUpdates` consumer, see Windows Service section).
