@@ -442,60 +442,52 @@ bot.command('start', async (ctx) => {
 
 bot.command('help', (ctx) => {
     ctx.reply(
-        '📓 EdgeBook · các lệnh chính\n' +
+        '📓 EdgeBook · Lệnh\n' +
         '\n' +
-        '💬 Chat & cá nhân hoá\n' +
-        '• Hỏi AI về trading, đầu tư, phân tích kỹ thuật (free 1, Pro 20, Premium 60 lượt/ngày)\n' +
+        '⚡ Gõ tắt (nhập nhanh)\n' +
+        't: Trade · c: Close · w: Watch · a: Alert\n' +
+        'b: Buy · s: Sell · q: Ask · f: Search · th: Thesis\n' +
+        '+ [việc] thêm task · wl Watchlist · pf Portfolio\n' +
+        'VD: t: Long BTC entry 108k SL 105k TP 115k\n' +
+        '\n' +
+        '💬 Chat & cá nhân\n' +
+        '• Hỏi AI bất kỳ về trading/đầu tư (free 1, Pro 20, Premium 60/ngày)\n' +
         '• Call me [tên] · My job is [nghề]\n' +
         '\n' +
-        '📂 Docs\n' +
+        '💾 Docs & lưu\n' +
+        '• Save: [nội dung] hoặc forward tin/ảnh → tự tag + lưu Docs (sv:)\n' +
         '• Add Doc [tên] [ID] · Use Doc [tên] · Current Doc\n' +
         '\n' +
-        '💾 Lưu nội dung\n' +
-        '• Save: [nội dung], hoặc forward tin/ảnh → lưu Docs\n' +
-        '\n' +
         '✅ To-Do & lịch\n' +
-        '• Add Task: [việc] · List Tasks · Complete Task: [số]\n' +
+        '• + [việc] · List Tasks · Complete Task: [số]\n' +
         '• Remind me… → tạo nhắc lịch\n' +
         '\n' +
         '📊 Research OS (Pro)\n' +
-        '• Forward tin → tự gắn tag ticker\n' +
-        '• Search: · Tag: · Digest · Weekly Report · Ask:\n' +
-        '• Stats · Starred\n' +
-        '• Thesis: [ticker] [bullish|bearish] [ý] → cảnh báo tin mâu thuẫn (Premium)\n' +
-        '• Theses · Close Thesis: [số]\n' +
+        '• Search: [từ khoá] (f:) · Tag: [ticker] · Ask: [câu hỏi] (q:)\n' +
+        '• Digest · Weekly · Stats · Starred · Star\n' +
+        '• Thesis: [ticker] bullish|bearish [ý] (Premium) · Theses · Close Thesis: [số]\n' +
         '\n' +
         '📈 Trade Journal (Pro)\n' +
-        '• Trade: Long BTC entry 108k SL 105k TP 115k → mở lệnh\n' +
-        '• Thêm tuỳ chọn: size 500 risk 1% fee 0.1% setup breakout emo 7 hr 95\n' +
-        '• Close: BTC 112k · Close: BTC +3.2% · Close: BTC 105k sl\n' +
-        '• Trades · Trade Stats\n' +
-        '• Trade Analytics · Equity · Export PDF (Premium)\n' +
+        '• Trade: Long BTC entry 108k SL 105k TP 115k (t:)\n' +
+        '  +tuỳ chọn: size 500 risk 1% fee 0.1% setup breakout emo 7 hr 95\n' +
+        '• Close: BTC 112k · +3.2% · 105k sl (c:)\n' +
+        '• Trades · Trade Stats · Trade Analytics · Equity · Export PDF (Premium)\n' +
         '\n' +
-        '🧠 Discipline & Psychology (Pro)\n' +
+        '🧠 Discipline (Pro)\n' +
         '• Trade: qua chốt an toàn 15s + checklist (mặc định bật)\n' +
-        '• Discipline → trạng thái · Discipline On/Off\n' +
-        '• Limit: 3 → giới hạn lệnh thua/ngày, chạm là khoá Trade:\n' +
-        '• Review → đối soát quy trình các lệnh đóng hôm nay\n' +
-        '• Thua lệnh → bot hỏi có tuân thủ kế hoạch, nhắc giảm 50% size\n' +
+        '• Discipline [on/off] · Limit: [1-10] · Review\n' +
         '\n' +
-        '💹 Market & Alerts (crypto qua Binance, cổ phiếu VN qua VNDirect)\n' +
-        '• Watch: BTC · Watch: HPG · Unwatch: ... (free 3 ticker, Pro+ không giới hạn)\n' +
-        '• Watchlist → giá live + thay đổi; mã VN kèm P/E + khối ngoại\n' +
-        '• Alert: BTC > 70k · Alert: HPG > 30 (Pro 10 alert, Premium unlimited)\n' +
-        '• Alert VN (cuối phiên): HPG foreign buy · HPG volume 2x · HPG rsi > 70 · HPG ma cross\n' +
-        '• Bot check giá mỗi phút (mã VN: foreign/volume/RSI/MA soát cuối phiên)\n' +
-        '• Alerts → xem & xoá alerts đang chạy\n' +
+        '💹 Market & Alerts (crypto: Binance · cổ phiếu VN: VNDirect)\n' +
+        '• Watch: BTC / HPG (w:) · Unwatch: … · Watchlist (wl)\n' +
+        '• Alert: BTC > 70k · HPG > 30 (a:) · Alerts\n' +
+        '• Alert VN cuối phiên: HPG foreign buy · volume 2x · rsi > 70 · ma cross\n' +
         '\n' +
-        '📊 Danh mục đầu tư (Pro)\n' +
-        '• Buy: HPG 1000 @ 25.5 → thêm/bình quân giá vị thế\n' +
-        '• Sell: HPG 500 @ 28 → bán bớt, chốt lãi/lỗ\n' +
-        '• Portfolio (Danh mục) → định giá live, lãi/lỗ, tỷ trọng\n' +
-        '• Position: HPG → chi tiết một mã\n' +
+        '📊 Danh mục (Pro)\n' +
+        '• Buy: HPG 1000 @ 25.5 (b:) · Sell: HPG 500 @ 28 (s:)\n' +
+        '• Portfolio (pf) · Position: HPG\n' +
         '\n' +
         '💳 Tài khoản\n' +
-        '• /plan · /upgrade\n' +
-        '• /invite → mời bạn, cả hai nhận +7 ngày Pro khi bạn ấy lưu research đầu tiên'
+        '• /plan · /upgrade · /invite (mời bạn, cả hai +7 ngày Pro)'
     );
 });
 
@@ -575,9 +567,35 @@ bot.command('upgrade', async (ctx) => {
     );
 });
 
+// Quick shortcuts — short forms expand to the canonical command text once at the
+// top of the handler, so every matcher below stays unchanged. Cuts typing on the
+// commands traders hit most. Only known keys expand; anything else passes through.
+const COLON_SHORTCUTS: Record<string, string> = {
+    t: 'Trade', c: 'Close', w: 'Watch', uw: 'Unwatch', a: 'Alert',
+    b: 'Buy', s: 'Sell', sv: 'Save', q: 'Ask', f: 'Search', th: 'Thesis',
+    pos: 'Position',
+};
+const WORD_SHORTCUTS: Record<string, string> = { wl: 'Watchlist', pf: 'Portfolio' };
+function expandShortcut(raw: string): string {
+    const t = raw.trim();
+    // "+ việc" → quick add task
+    const plus = t.match(/^\+\s*(.+)$/s);
+    if (plus) return `Add Task: ${plus[1].trim()}`;
+    // one-word view shortcuts (wl, pf)
+    const word = WORD_SHORTCUTS[t.toLowerCase()];
+    if (word) return word;
+    // "<short>: rest" → "<Full>: rest"
+    const m = t.match(/^([a-z]{1,3}):\s*([\s\S]*)$/i);
+    if (m) {
+        const full = COLON_SHORTCUTS[m[1].toLowerCase()];
+        if (full) return `${full}: ${m[2].trim()}`;
+    }
+    return raw;
+}
+
 // General Chat Handler
 bot.on('message:text', async (ctx) => {
-    const text = ctx.message.text;
+    let text = ctx.message.text;
     const userId = ctx.from?.id;
 
     await ctx.replyWithChatAction('typing');
@@ -586,6 +604,9 @@ bot.on('message:text', async (ctx) => {
         await ctx.reply('Error: Unknown User ID.');
         return;
     }
+
+    // Expand quick shortcuts (skip forwarded messages — those go to research save).
+    if (!isForwarded(ctx.message)) text = expandShortcut(text);
 
     // --- DOCS MANAGEMENT COMMANDS ---
     const addDocMatch = text.match(/^add doc\s+(\S+)\s+(\S+)/i);
