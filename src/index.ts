@@ -13,6 +13,7 @@ import { ThesisService, ThesisItem } from './services/thesis.service';
 import { MarketService } from './services/market.service';
 import { VnStockService } from './services/vn-stock.service';
 import { CafefService, flowStreak } from './services/cafef.service';
+import { PnfService } from './services/pnf.service';
 import { MarketRouter } from './services/market-router';
 import { AlertService, AlertType, AlertItem } from './services/alert.service';
 import { WatchlistService } from './services/watchlist.service';
@@ -38,6 +39,7 @@ const thesisService = new ThesisService();
 const marketService = new MarketService();
 const vnStockService = new VnStockService();
 const cafefService = new CafefService();
+const pnfService = new PnfService();
 const marketRouter = new MarketRouter(marketService, vnStockService);
 const alertService = new AlertService();
 const watchlistService = new WatchlistService();
@@ -103,6 +105,11 @@ function formatPriceMkt(value: number, market?: 'crypto' | 'vn'): string {
         return value.toFixed(2).replace(/\.?0+$/, '');
     }
     return formatPrice(value);
+}
+
+// Escape the three HTML-significant chars so a string is safe inside parse_mode:'HTML'.
+function escapeHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // Compact a raw VND amount to a tỷ/triệu string (foreign flow, portfolio NAV/P&L).
@@ -489,6 +496,7 @@ bot.command('help', (ctx) => {
         '• Alert VN cuối phiên: HPG foreign buy 50 3p · HPG tudoanh buy · volume 2x · rsi > 70 · ma cross\n' +
         '   (50 = ròng ≥50 tỷ · 3p = ≥3 phiên liên tiếp · lặp mỗi phiên)\n' +
         '• 💰 Digest dòng tiền lớn tự gửi 15:30 mỗi phiên (NN + tự doanh mã bạn theo dõi)\n' +
+        '• 📐 PnF: HPG — đồ thị Point & Figure (X/O) + tín hiệu mua/bán, giá mục tiêu\n' +
         '\n' +
         '📊 Danh mục (Pro)\n' +
         '• Buy: HPG 1000 @ 25.5 (b:) · Sell: HPG 500 @ 28 (s:)\n' +
@@ -1450,6 +1458,64 @@ bot.on('message:text', async (ctx) => {
             (curve.skipped > 0 ? `\n(${curve.skipped} lệnh không có SL, không tính R)` : '')
         );
         return;
+    }
+
+    // Point & Figure chart (Pro) — ASCII grid + tín hiệu. Cổ phiếu VN (cần OHLC bars).
+    {
+        const pm = text.match(/^(?:pnf|p&f|p ?và ?f|point.?and.?figure)\s*:?\s*([a-z0-9]{2,7})(?:\s+(\d+(?:\.\d+)?))?(?:\s+r\s*(\d+))?\s*$/i);
+        if (pm) {
+            const limits = await planService.getLimits(userId);
+            if (limits.maxActiveAlerts === 0) {
+                await ctx.reply('🔒 Point & Figure là tính năng Pro. Gõ /upgrade để mở khoá!');
+                return;
+            }
+            const rawTicker = pm[1];
+            if (!isValidTicker(rawTicker)) {
+                await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: PnF: HPG`);
+                return;
+            }
+            const ticker = rawTicker.toUpperCase();
+            if (marketRouter.classify(ticker) !== 'vn') {
+                await ctx.reply('⚠️ Point & Figure hiện hỗ trợ cổ phiếu VN (vd HPG, FPT, SSI).');
+                return;
+            }
+            const box = pm[2] ? parseFloat(pm[2]) : undefined;
+            const reversal = pm[3] ? parseInt(pm[3], 10) : undefined;
+            const bars = await vnStockService.getDailyBars(ticker, 260);
+            if (bars.length < 20) {
+                await ctx.reply(`⚠️ Chưa đủ dữ liệu để vẽ P&F cho ${ticker}.`);
+                return;
+            }
+            const result = pnfService.compute(bars.map((b) => ({ h: b.h, l: b.l, c: b.c })), { box, reversal });
+            if (!result) {
+                await ctx.reply(`⚠️ Không dựng được đồ thị P&F cho ${ticker}.`);
+                return;
+            }
+            const grid = pnfService.render(result);
+            const cur = result.columns[result.columns.length - 1];
+            // P&F signal is a *prevailing state* (stays until an opposing signal forms),
+            // distinct from the current column (the live X/O leg, which may be a pullback).
+            const sig = result.signal === 'buy'
+                ? '🟢 Trạng thái: ĐANG TRÊN TÍN HIỆU MUA (double-top)'
+                : result.signal === 'sell'
+                    ? '🔴 Trạng thái: ĐANG TRÊN TÍN HIỆU BÁN (double-bottom)'
+                    : '➖ Trạng thái: chưa có tín hiệu P&F rõ ràng';
+            const colNow = `Cột hiện tại: ${cur.dir === 'X' ? 'X (giá đang đẩy lên)' : 'O (giá đang chỉnh xuống)'}`;
+            let note = '';
+            if (result.signal === 'buy' && cur.dir === 'O') note = '\n⚠️ Đang nhịp chỉnh (cột O) bên trong xu hướng mua.';
+            else if (result.signal === 'sell' && cur.dir === 'X') note = '\n⚠️ Đang hồi kỹ thuật (cột X) bên trong xu hướng bán.';
+            const dec = result.box < 1 ? 1 : 0;
+            const target = result.priceTarget !== undefined
+                ? `\n🎯 Mục tiêu kỹ thuật (vertical count, ${result.signal === 'buy' ? 'lên' : 'xuống'}): ~${result.priceTarget.toFixed(dec)}`
+                : '';
+            const header = `📐 ${ticker} · Point & Figure · ${result.reversal} ô đảo chiều · box ${result.box}`;
+            const legend = 'X = giá tăng · O = giá giảm · trục trái = giá (nghìn đ)';
+            await ctx.reply(
+                `${header}\n<pre>${escapeHtml(grid)}</pre>\n${sig}\n${colNow}${note}${target}\n\n${legend}\nGiá hiện tại: ${result.lastPrice}`,
+                { parse_mode: 'HTML' }
+            );
+            return;
+        }
     }
 
     // VN stock alerts (Pro, evaluated end-of-day): khối ngoại / volume / RSI / MA cross.
