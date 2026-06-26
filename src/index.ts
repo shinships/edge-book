@@ -487,7 +487,7 @@ bot.command('help', (ctx) => {
         '\n' +
         '💾 Docs & lưu\n' +
         '• Save: [nội dung] hoặc forward tin/ảnh → tự tag + lưu Docs (sv:)\n' +
-        '• Add Doc [tên] [ID] · Use Doc [tên] · Current Doc\n' +
+        '• Add Doc [tên] [ID] · Use Doc [tên] · List Docs · Current Doc\n' +
         '\n' +
         '✅ To-Do & lịch\n' +
         '• + [việc] · List Tasks · Complete Task: [số]\n' +
@@ -654,6 +654,31 @@ bot.on('message:text', async (ctx) => {
         }
         await userService.setDocAlias(userId, alias, docId);
         await ctx.reply(`✅ Added Doc "${alias}". Set as default if none existed.`);
+        return;
+    }
+
+    if (['list docs', 'docs', 'my docs'].includes(text.toLowerCase())) {
+        const user = await userService.getUser(userId);
+        const entries = Object.entries(user.docAliases ?? {});
+        if (entries.length === 0) {
+            if (config.googleDocId) {
+                await ctx.reply(
+                    `📚 Bạn chưa thêm Doc nào.\nĐang dùng system default:\n🔗 ${docUrl(config.googleDocId)}\n\nThêm doc: Add Doc [tên] [ID]`,
+                    { link_preview_options: { is_disabled: true } }
+                );
+            } else {
+                await ctx.reply('📚 Bạn chưa thêm Doc nào. Thêm bằng: Add Doc [tên] [ID]');
+            }
+            return;
+        }
+        const lines = entries.map(([alias, id]) => {
+            const active = id === user.activeDocId ? ' ✅ (đang dùng)' : '';
+            return `🏷️ ${alias}${active}\n   🔗 ${docUrl(id)}`;
+        });
+        await ctx.reply(
+            `📚 Docs của bạn (${entries.length})\n\n${lines.join('\n\n')}\n\nChuyển: Use Doc [tên] · Thêm: Add Doc [tên] [ID]`,
+            { link_preview_options: { is_disabled: true } }
+        );
         return;
     }
 
