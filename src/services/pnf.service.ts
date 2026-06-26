@@ -46,7 +46,16 @@ export class PnfService {
     compute(bars: PnfBar[], opts?: { box?: number; reversal?: number }): PnfResult | null {
         if (!Array.isArray(bars) || bars.length < 5) return null;
         const lastPrice = bars[bars.length - 1].c;
-        const box = opts?.box && opts.box > 0 ? opts.box : defaultBoxSize(lastPrice);
+        let box = defaultBoxSize(lastPrice);
+        if (opts?.box && opts.box > 0) {
+            let lo = Infinity, hi = -Infinity;
+            for (const b of bars) { if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h; }
+            const span = (hi - lo) / opts.box;
+            // Accept a user-supplied box only if it yields a sensible grid; otherwise keep
+            // the auto-scaled default (guards against a 1-cell collapse like box 500 on a
+            // 63.5 stock, or a box so tiny it explodes into thousands of rows).
+            if (span >= 3 && span <= 500) box = opts.box;
+        }
         const reversal = opts?.reversal && opts.reversal >= 1 ? Math.floor(opts.reversal) : 3;
         const idx = (p: number) => Math.floor(p / box + 1e-9);
 

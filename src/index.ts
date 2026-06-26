@@ -14,6 +14,7 @@ import { MarketService } from './services/market.service';
 import { VnStockService } from './services/vn-stock.service';
 import { CafefService, flowStreak } from './services/cafef.service';
 import { PnfService } from './services/pnf.service';
+import { renderPnfImage } from './services/pnf-image';
 import { MarketRouter } from './services/market-router';
 import { AlertService, AlertType, AlertItem } from './services/alert.service';
 import { WatchlistService } from './services/watchlist.service';
@@ -105,11 +106,6 @@ function formatPriceMkt(value: number, market?: 'crypto' | 'vn'): string {
         return value.toFixed(2).replace(/\.?0+$/, '');
     }
     return formatPrice(value);
-}
-
-// Escape the three HTML-significant chars so a string is safe inside parse_mode:'HTML'.
-function escapeHtml(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // Compact a raw VND amount to a tỷ/triệu string (foreign flow, portfolio NAV/P&L).
@@ -1491,7 +1487,7 @@ bot.on('message:text', async (ctx) => {
                 await ctx.reply(`⚠️ Không dựng được đồ thị P&F cho ${ticker}.`);
                 return;
             }
-            const grid = pnfService.render(result);
+            const png = renderPnfImage(result, ticker);
             const cur = result.columns[result.columns.length - 1];
             // P&F signal is a *prevailing state* (stays until an opposing signal forms),
             // distinct from the current column (the live X/O leg, which may be a pullback).
@@ -1509,11 +1505,8 @@ bot.on('message:text', async (ctx) => {
                 ? `\n🎯 Mục tiêu kỹ thuật (vertical count, ${result.signal === 'buy' ? 'lên' : 'xuống'}): ~${result.priceTarget.toFixed(dec)}`
                 : '';
             const header = `📐 ${ticker} · Point & Figure · ${result.reversal} ô đảo chiều · box ${result.box}`;
-            const legend = 'X = giá tăng · O = giá giảm · trục trái = giá (nghìn đ)';
-            await ctx.reply(
-                `${header}\n<pre>${escapeHtml(grid)}</pre>\n${sig}\n${colNow}${note}${target}\n\n${legend}\nGiá hiện tại: ${result.lastPrice}`,
-                { parse_mode: 'HTML' }
-            );
+            const caption = `${header}\n${sig}\n${colNow}${note}${target}\n\nX = giá tăng · O = giá giảm · giá nghìn đ · Giá hiện tại: ${result.lastPrice}`;
+            await ctx.replyWithPhoto(new InputFile(png, `pnf-${ticker}.png`), { caption });
             return;
         }
     }
