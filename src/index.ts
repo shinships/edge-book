@@ -12,6 +12,7 @@ import { ReportService } from './services/report.service';
 import { ThesisService, ThesisItem } from './services/thesis.service';
 import { MarketService } from './services/market.service';
 import { VnStockService } from './services/vn-stock.service';
+import { CafefService, flowStreak } from './services/cafef.service';
 import { MarketRouter } from './services/market-router';
 import { AlertService, AlertType, AlertItem } from './services/alert.service';
 import { WatchlistService } from './services/watchlist.service';
@@ -36,6 +37,7 @@ const reportService = new ReportService();
 const thesisService = new ThesisService();
 const marketService = new MarketService();
 const vnStockService = new VnStockService();
+const cafefService = new CafefService();
 const marketRouter = new MarketRouter(marketService, vnStockService);
 const alertService = new AlertService();
 const watchlistService = new WatchlistService();
@@ -120,8 +122,12 @@ function fmtMoney(value: number, market: 'crypto' | 'vn'): string {
 
 // Short human label for an alert (price alerts show the price; VN alerts their condition).
 function describeAlert(a: AlertItem): string {
+    const streakN = Number(a.params?.streakDays ?? 1);
+    const streakTxt = streakN > 1 ? ` ≥${streakN} phiên` : '';
+    const thrTxt = a.targetPrice > 0 ? ` ≥${a.targetPrice} tỷ` : '';
     switch (a.alertType) {
-        case 'foreign': return `${a.ticker} khối ngoại ${a.condition === 'above' ? 'mua ròng' : 'bán ròng'}`;
+        case 'foreign': return `${a.ticker} khối ngoại ${a.condition === 'above' ? 'mua ròng' : 'bán ròng'}${thrTxt}${streakTxt}`;
+        case 'proprietary': return `${a.ticker} tự doanh ${a.condition === 'above' ? 'mua ròng' : 'bán ròng'}${thrTxt}${streakTxt}`;
         case 'volume': return `${a.ticker} volume ≥ ${a.targetPrice}x TB20`;
         case 'rsi': return `${a.ticker} RSI ${a.condition === 'above' ? '>' : '<'} ${a.targetPrice}`;
         case 'macross': return `${a.ticker} MA20×MA50`;
@@ -480,7 +486,9 @@ bot.command('help', (ctx) => {
         '💹 Market & Alerts (crypto: Binance · cổ phiếu VN: VNDirect)\n' +
         '• Watch: BTC / HPG (w:) · Unwatch: … · Watchlist (wl)\n' +
         '• Alert: BTC > 70k · HPG > 30 (a:) · Alerts\n' +
-        '• Alert VN cuối phiên: HPG foreign buy · volume 2x · rsi > 70 · ma cross\n' +
+        '• Alert VN cuối phiên: HPG foreign buy 50 3p · HPG tudoanh buy · volume 2x · rsi > 70 · ma cross\n' +
+        '   (50 = ròng ≥50 tỷ · 3p = ≥3 phiên liên tiếp · lặp mỗi phiên)\n' +
+        '• 💰 Digest dòng tiền lớn tự gửi 15:30 mỗi phiên (NN + tự doanh mã bạn theo dõi)\n' +
         '\n' +
         '📊 Danh mục (Pro)\n' +
         '• Buy: HPG 1000 @ 25.5 (b:) · Sell: HPG 500 @ 28 (s:)\n' +
@@ -1447,11 +1455,24 @@ bot.on('message:text', async (ctx) => {
     // VN stock alerts (Pro, evaluated end-of-day): khối ngoại / volume / RSI / MA cross.
     // Matched BEFORE the generic price alert so multi-token forms aren't misparsed.
     {
-        let parsed: { type: AlertType; condition: 'above' | 'below'; target: number; rawTicker: string; desc: string } | null = null;
+        let parsed: { type: AlertType; condition: 'above' | 'below'; target: number; rawTicker: string; desc: string; params?: Record<string, any> } | null = null;
         let m: RegExpMatchArray | null;
-        if ((m = text.match(/^alert:\s*(\S+)\s+foreign\s+(buy|sell)\s*$/i))) {
-            const buy = m[2].toLowerCase() === 'buy';
-            parsed = { type: 'foreign', rawTicker: m[1], condition: buy ? 'above' : 'below', target: 0, desc: `khối ngoại ${buy ? 'mua ròng' : 'bán ròng'}` };
+        // Money flow: Alert: HPG foreign buy [50] [3p]  — 50 = ngưỡng ròng (tỷ), 3p = ≥3 phiên liên tiếp.
+        // Tự doanh: Alert: HPG tudoanh buy [50] [3p]. Threshold & streak đều tuỳ chọn (mặc định 1 phiên, không ngưỡng).
+        if ((m = text.match(/^alert:\s*(\S+)\s+(foreign|nn|khoingoai|tudoanh|td|proprietary|prop)\s+(buy|sell|mua|ban)(?:\s+(\d+(?:\.\d+)?)\s*(?:ty|tỷ|bn|b)?)?(?:\s+(\d+)\s*p(?:hien|hiên)?)?\s*$/i))) {
+            const kind = m[2].toLowerCase();
+            const isProp = /^(tudoanh|td|proprietary|prop)$/.test(kind);
+            const buy = /^(buy|mua)$/i.test(m[3]);
+            const thr = m[4] ? parseFloat(m[4]) : 0;       // ngưỡng tỷ đồng (0 = không ngưỡng)
+            const streak = m[5] ? Math.max(1, parseInt(m[5], 10)) : 1;
+            const label = isProp ? 'tự doanh' : 'khối ngoại';
+            const desc = `${label} ${buy ? 'mua ròng' : 'bán ròng'}` +
+                (thr > 0 ? ` ≥${thr} tỷ` : '') + (streak > 1 ? ` ≥${streak} phiên liên tiếp` : '');
+            parsed = {
+                type: isProp ? 'proprietary' : 'foreign',
+                rawTicker: m[1], condition: buy ? 'above' : 'below', target: thr, desc,
+                params: { streakDays: streak, recurring: true },
+            };
         } else if ((m = text.match(/^alert:\s*(\S+)\s+vol(?:ume)?\s+(\d+(?:\.\d+)?)x?\s*$/i))) {
             parsed = { type: 'volume', rawTicker: m[1], condition: 'above', target: parseFloat(m[2]), desc: `volume ≥ ${parseFloat(m[2])}x TB20 phiên` };
         } else if ((m = text.match(/^alert:\s*(\S+)\s+rsi\s*([<>])\s*(\d+(?:\.\d+)?)\s*$/i))) {
@@ -1486,14 +1507,16 @@ bot.on('message:text', async (ctx) => {
                 await ctx.reply(`⚠️ Đã đạt giới hạn ${limits.maxActiveAlerts} alerts. Xoá bớt (gõ Alerts) hoặc /upgrade lên Premium.`);
                 return;
             }
-            const alert = await alertService.addAlert(userId, ticker, parsed.condition, parsed.target, parsed.type);
+            const alert = await alertService.addAlert(userId, ticker, parsed.condition, parsed.target, parsed.type, parsed.params);
             if (!alert) {
                 await ctx.reply('⚠️ Không thể tạo alert. Vui lòng thử lại.');
                 return;
             }
+            const recurring = parsed.params?.recurring === true;
             await ctx.reply(
                 `🔔 Đã đặt alert ${ticker}: ${parsed.desc}.\n` +
-                `Bot kiểm tra sau giờ đóng cửa (≈15:15) mỗi phiên và báo khi thoả.`
+                `Bot kiểm tra sau giờ đóng cửa (≈15:15) mỗi phiên và báo khi thoả.` +
+                (recurring ? '\n♻️ Lặp lại mỗi phiên (theo dõi dài hạn, không tự tắt sau lần đầu).' : '')
             );
             return;
         }
@@ -2150,13 +2173,27 @@ function computeRSI(closes: number[], period = 14): number | null {
 // if the condition isn't met (or data is unavailable — best-effort, never throws).
 async function evaluateEodAlert(a: AlertItem): Promise<string | null> {
     try {
-        if (a.alertType === 'foreign') {
-            const f = await vnStockService.getForeignFlow(a.ticker);
-            if (!f) return null;
-            const netBuy = f.netValue > 0;
-            const hit = a.condition === 'above' ? netBuy : f.netValue < 0;
-            if (!hit) return null;
-            return `🔔 ${a.ticker}: khối ngoại ${netBuy ? 'MUA' : 'BÁN'} ròng ${fmtVnd(Math.abs(f.netValue))}đ phiên gần nhất.`;
+        if (a.alertType === 'foreign' || a.alertType === 'proprietary') {
+            const isProp = a.alertType === 'proprietary';
+            const days = isProp
+                ? await cafefService.getProprietarySeries(a.ticker, 5)
+                : await cafefService.getForeignSeries(a.ticker, 5);
+            if (days.length === 0) return null;
+            const side: 'buy' | 'sell' = a.condition === 'above' ? 'buy' : 'sell';
+            const latest = days[0];
+            const matchesSide = side === 'buy' ? latest.netValue > 0 : latest.netValue < 0;
+            if (!matchesSide) return null;
+            // Threshold (tỷ đồng) on the latest session's |net|; 0 = no threshold.
+            const thrVnd = (a.targetPrice || 0) * 1e9;
+            if (thrVnd > 0 && Math.abs(latest.netValue) < thrVnd) return null;
+            // Streak requirement: N consecutive same-side sessions.
+            const needStreak = Math.max(1, Number(a.params?.streakDays ?? 1));
+            const streak = flowStreak(days, side);
+            if (streak < needStreak) return null;
+            const label = isProp ? 'Tự doanh' : 'Khối ngoại';
+            const emoji = side === 'buy' ? '🟢' : '🔴';
+            const streakTxt = streak > 1 ? ` — phiên thứ ${streak} liên tiếp` : '';
+            return `${emoji} ${a.ticker}: ${label} ${side === 'buy' ? 'MUA' : 'BÁN'} ròng ${fmtVnd(Math.abs(latest.netValue))}đ phiên ${latest.date}${streakTxt}.`;
         }
         if (a.alertType === 'volume') {
             const bars = await vnStockService.getDailyBars(a.ticker, 25);
@@ -2207,8 +2244,10 @@ cron.schedule('15 15 * * 1-5', async () => {
         for (const a of active) {
             const msg = await evaluateEodAlert(a);
             if (!msg) continue;
-            // Mark triggered BEFORE sending so a send failure can't re-fire forever.
-            await alertService.markTriggered(a.id);
+            // One-shot alerts: mark triggered BEFORE sending so a send failure can't re-fire
+            // forever. Recurring money-flow alerts stay active and re-evaluate every session
+            // (cron runs once/day → no same-day double fire).
+            if (a.params?.recurring !== true) await alertService.markTriggered(a.id);
             try {
                 await bot.api.sendMessage(a.userId, msg);
             } catch (e) {
@@ -2220,6 +2259,86 @@ cron.schedule('15 15 * * 1-5', async () => {
         console.error('[VnAlerts] cron error:', e);
     } finally {
         vnAlertCronBusy = false;
+    }
+}, {
+    timezone: 'Asia/Ho_Chi_Minh',
+});
+
+// --- DAILY SMART-MONEY DIGEST CRON (15:30 ICT, weekdays — after VN close) ---
+// For each Pro+ user, ranks the latest-session foreign + proprietary net flow across the
+// VN tickers they actually track (watchlist ∪ portfolio ∪ active alerts) and DMs the top
+// money movers. Personalised → a reason to open the app every session.
+
+// Union of the VN tickers a user is tracking, across watchlist, portfolio and alerts.
+async function trackedVnTickers(userId: number): Promise<string[]> {
+    const [wl, positions, userAlerts] = await Promise.all([
+        watchlistService.getWatchlist(userId),
+        portfolioService.getPositions(userId),
+        alertService.getActiveAlerts(userId),
+    ]);
+    const set = new Set<string>();
+    for (const t of wl) set.add(t.toUpperCase());
+    for (const p of positions) set.add(p.ticker.toUpperCase());
+    for (const a of userAlerts) set.add(a.ticker.toUpperCase());
+    return [...set].filter((t) => marketRouter.classify(t) === 'vn');
+}
+
+interface FlowRow { ticker: string; foreign?: number; prop?: number; }
+
+// Render the smart-money digest, or null if there's no usable flow data.
+function buildSmartMoneyDigest(rows: FlowRow[]): string | null {
+    const fmtLine = (t: string, v: number) => `${v >= 0 ? '🟢' : '🔴'} ${t}: ${v >= 0 ? '+' : '-'}${fmtVnd(Math.abs(v))}đ`;
+    const section = (title: string, pick: (r: FlowRow) => number | undefined): string | null => {
+        const vals = rows
+            .map((r) => ({ ticker: r.ticker, v: pick(r) }))
+            .filter((x): x is { ticker: string; v: number } => Number.isFinite(x.v))
+            .sort((a, b) => b.v - a.v);
+        if (vals.length === 0) return null;
+        const buys = vals.filter((x) => x.v > 0).slice(0, 5);
+        const sells = vals.filter((x) => x.v < 0).slice(-3).reverse(); // 3 most-negative, biggest first
+        const lines = [...buys, ...sells].map((x) => fmtLine(x.ticker, x.v));
+        return lines.length ? `${title}\n${lines.join('\n')}` : null;
+    };
+    const sections = [
+        section('🌐 Khối ngoại (ròng):', (r) => r.foreign),
+        section('🏦 Tự doanh CTCK (ròng):', (r) => r.prop),
+    ].filter((s): s is string => s !== null);
+    if (sections.length === 0) return null;
+    return `💰 Dòng tiền lớn cuối phiên — mã bạn theo dõi\n\n${sections.join('\n\n')}\n\n— 🤖 EdgeBook · t.me/${bot.botInfo.username}`;
+}
+
+let smartMoneyCronBusy = false;
+cron.schedule('30 15 * * 1-5', async () => {
+    if (smartMoneyCronBusy) return;
+    smartMoneyCronBusy = true;
+    console.log('[SmartMoney] Running daily smart-money digest cron...');
+    try {
+        const users = await planService.getDigestEligibleUsers();
+        for (const userId of users) {
+            try {
+                const tickers = (await trackedVnTickers(userId)).slice(0, 30);
+                if (tickers.length === 0) continue;
+                const rows: FlowRow[] = await Promise.all(
+                    tickers.map(async (ticker) => {
+                        const [fo, pr] = await Promise.all([
+                            cafefService.getForeignSeries(ticker, 1),
+                            cafefService.getProprietarySeries(ticker, 1),
+                        ]);
+                        return { ticker, foreign: fo[0]?.netValue, prop: pr[0]?.netValue };
+                    })
+                );
+                const msg = buildSmartMoneyDigest(rows);
+                if (!msg) continue;
+                await bot.api.sendMessage(userId, msg);
+                await new Promise((r) => setTimeout(r, 150)); // Telegram rate-limit cushion
+            } catch (e) {
+                console.error(`[SmartMoney] Error for user ${userId}:`, e);
+            }
+        }
+    } catch (e) {
+        console.error('[SmartMoney] cron error:', e);
+    } finally {
+        smartMoneyCronBusy = false;
     }
 }, {
     timezone: 'Asia/Ho_Chi_Minh',

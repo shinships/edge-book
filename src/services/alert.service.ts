@@ -2,7 +2,7 @@ import { db } from '../db';
 import { alerts } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 
-export type AlertType = 'price' | 'foreign' | 'volume' | 'rsi' | 'macross';
+export type AlertType = 'price' | 'foreign' | 'proprietary' | 'volume' | 'rsi' | 'macross';
 
 export interface AlertItem {
     id: string;
