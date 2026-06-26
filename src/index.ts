@@ -12,7 +12,7 @@ import { ReportService } from './services/report.service';
 import { ThesisService, ThesisItem } from './services/thesis.service';
 import { MarketService } from './services/market.service';
 import { VnStockService } from './services/vn-stock.service';
-import { CafefService, flowStreak } from './services/cafef.service';
+import { CafefService, flowStreak, InsiderTx } from './services/cafef.service';
 import { PnfService } from './services/pnf.service';
 import { renderPnfImage } from './services/pnf-image';
 import { MarketRouter } from './services/market-router';
@@ -108,6 +108,27 @@ function formatPriceMkt(value: number, market?: 'crypto' | 'vn'): string {
     return formatPrice(value);
 }
 
+// Compact a share count → "50 triệu cp" / "6,6 triệu cp" / "450K cp" (VN comma decimal).
+function fmtShares(n: number): string {
+    if (!Number.isFinite(n) || n <= 0) return '0 cp';
+    if (n >= 1e6) return `${(n / 1e6).toFixed(n % 1e6 === 0 ? 0 : 1).replace('.', ',')} triệu cp`;
+    if (n >= 1e3) return `${Math.round(n / 1e3)}K cp`;
+    return `${n} cp`;
+}
+
+// One human line for an insider/related-person filing.
+function formatInsiderTx(t: InsiderTx): string {
+    const who = t.isRelated && t.relatedTo
+        ? `${t.person} (${t.role || 'NLQ'} của ${t.relatedTo})`
+        : `${t.person}${t.role ? ` · ${t.role}` : ''}`;
+    const act = t.side === 'buy' ? '🟢 ĐK MUA' : t.side === 'sell' ? '🔴 ĐK BÁN' : 'ĐK';
+    const win = t.beginDate && t.endDate ? ` · ${t.beginDate}→${t.endDate}` : '';
+    const realVol = t.realBuy || t.realSell;
+    const real = realVol ? ` · đã ${t.realBuy ? 'mua' : 'bán'} ${fmtShares(realVol)}` : '';
+    const pub = t.publishedDate ? `[${t.publishedDate}] ` : '';
+    return `${pub}${who}\n   ${act} ${fmtShares(t.planVolume)}${win}${real}`;
+}
+
 // Compact a raw VND amount to a tỷ/triệu string (foreign flow, portfolio NAV/P&L).
 function fmtVnd(value: number): string {
     const abs = Math.abs(value);
@@ -134,6 +155,7 @@ function describeAlert(a: AlertItem): string {
         case 'volume': return `${a.ticker} volume ≥ ${a.targetPrice}x TB20`;
         case 'rsi': return `${a.ticker} RSI ${a.condition === 'above' ? '>' : '<'} ${a.targetPrice}`;
         case 'macross': return `${a.ticker} MA20×MA50`;
+        case 'insider': return `${a.ticker} giao dịch nội bộ (đăng ký mới)`;
         default: return `${a.ticker} ${a.condition === 'above' ? '>' : '<'} ${formatPriceMkt(a.targetPrice, marketRouter.classify(a.ticker))}`;
     }
 }
@@ -493,6 +515,7 @@ bot.command('help', (ctx) => {
         '   (50 = ròng ≥50 tỷ · 3p = ≥3 phiên liên tiếp · lặp mỗi phiên)\n' +
         '• 💰 Digest dòng tiền lớn tự gửi 15:30 mỗi phiên (NN + tự doanh mã bạn theo dõi)\n' +
         '• 📐 PnF: HPG — đồ thị Point & Figure (X/O) + tín hiệu mua/bán, giá mục tiêu\n' +
+        '• 👔 Insider: HPG — giao dịch nội bộ + người liên quan · Alert: HPG insider (báo ĐK mới)\n' +
         '\n' +
         '📊 Danh mục (Pro)\n' +
         '• Buy: HPG 1000 @ 25.5 (b:) · Sell: HPG 500 @ 28 (s:)\n' +
@@ -1456,6 +1479,39 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
+    // Insider transactions (Pro) — giao dịch cổ đông nội bộ + người liên quan (CafeF). VN only.
+    {
+        const im = text.match(/^(?:insider|nội ?bộ|noi ?bo|nb)\s*:?\s*([a-z0-9]{2,7})\s*$/i);
+        if (im) {
+            const limits = await planService.getLimits(userId);
+            if (limits.maxActiveAlerts === 0) {
+                await ctx.reply('🔒 Giao dịch nội bộ là tính năng Pro. Gõ /upgrade để mở khoá!');
+                return;
+            }
+            const rawTicker = im[1];
+            if (!isValidTicker(rawTicker)) {
+                await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: Insider: HPG`);
+                return;
+            }
+            const ticker = rawTicker.toUpperCase();
+            if (marketRouter.classify(ticker) !== 'vn') {
+                await ctx.reply('⚠️ Giao dịch nội bộ chỉ áp dụng cho cổ phiếu VN (vd HPG, FPT, SSI).');
+                return;
+            }
+            const txs = await cafefService.getInsiderTransactions(ticker, 5);
+            if (txs.length === 0) {
+                await ctx.reply(`📋 ${ticker}: chưa có dữ liệu giao dịch nội bộ gần đây (hoặc nguồn tạm gián đoạn).`);
+                return;
+            }
+            const body = txs.map(formatInsiderTx).join('\n\n');
+            await ctx.reply(
+                `👔 Giao dịch nội bộ ${ticker} (mới nhất)\n\n${body}\n\n` +
+                `Đặt cảnh báo khi có đăng ký mới: Alert: ${ticker} insider`
+            );
+            return;
+        }
+    }
+
     // Point & Figure chart (Pro) — ASCII grid + tín hiệu. Cổ phiếu VN (cần OHLC bars).
     {
         const pm = text.match(/^(?:pnf|p&f|p ?và ?f|point.?and.?figure)\s*:?\s*([a-z0-9]{2,7})(?:\s+(\d+(?:\.\d+)?))?(?:\s+r\s*(\d+))?\s*$/i);
@@ -1538,6 +1594,8 @@ bot.on('message:text', async (ctx) => {
             parsed = { type: 'rsi', rawTicker: m[1], condition: m[2] === '>' ? 'above' : 'below', target: parseFloat(m[3]), desc: `RSI(14) ${m[2]} ${parseFloat(m[3])}` };
         } else if ((m = text.match(/^alert:\s*(\S+)\s+ma\s*cross\s*$/i))) {
             parsed = { type: 'macross', rawTicker: m[1], condition: 'above', target: 0, desc: 'MA20 cắt MA50 (golden/death)' };
+        } else if ((m = text.match(/^alert:\s*(\S+)\s+(insider|noi ?bo|nội ?bộ|nb)\s*$/i))) {
+            parsed = { type: 'insider', rawTicker: m[1], condition: 'above', target: 0, desc: 'giao dịch nội bộ (đăng ký mới)', params: { recurring: true } };
         }
         if (parsed) {
             const limits = await planService.getLimits(userId);
@@ -1565,6 +1623,11 @@ bot.on('message:text', async (ctx) => {
             if (limits.maxActiveAlerts !== -1 && await alertService.countActive(userId) >= limits.maxActiveAlerts) {
                 await ctx.reply(`⚠️ Đã đạt giới hạn ${limits.maxActiveAlerts} alerts. Xoá bớt (gõ Alerts) hoặc /upgrade lên Premium.`);
                 return;
+            }
+            // Insider alerts only fire on FUTURE filings → baseline lastSeen to the latest current one.
+            if (parsed.type === 'insider') {
+                const latest = await cafefService.getInsiderTransactions(ticker, 1);
+                parsed.params = { ...parsed.params, lastSeen: latest[0]?.publishedMs ?? 0 };
             }
             const alert = await alertService.addAlert(userId, ticker, parsed.condition, parsed.target, parsed.type, parsed.params);
             if (!alert) {
@@ -2253,6 +2316,19 @@ async function evaluateEodAlert(a: AlertItem): Promise<string | null> {
             const emoji = side === 'buy' ? '🟢' : '🔴';
             const streakTxt = streak > 1 ? ` — phiên thứ ${streak} liên tiếp` : '';
             return `${emoji} ${a.ticker}: ${label} ${side === 'buy' ? 'MUA' : 'BÁN'} ròng ${fmtVnd(Math.abs(latest.netValue))}đ phiên ${latest.date}${streakTxt}.`;
+        }
+        if (a.alertType === 'insider') {
+            const txs = await cafefService.getInsiderTransactions(a.ticker, 10);
+            if (txs.length === 0) return null;
+            const lastSeen = Number(a.params?.lastSeen ?? 0);
+            const fresh = txs.filter((t) => t.publishedMs > lastSeen);
+            if (fresh.length === 0) return null;
+            // Advance the marker so the same filing won't re-fire next session.
+            const newest = Math.max(...txs.map((t) => t.publishedMs));
+            await alertService.setParams(a.id, { ...(a.params || {}), lastSeen: newest });
+            const lines = fresh.slice(0, 3).map(formatInsiderTx).join('\n\n');
+            const more = fresh.length > 3 ? `\n\n(+${fresh.length - 3} đăng ký mới khác)` : '';
+            return `👔 ${a.ticker}: có ${fresh.length} đăng ký giao dịch nội bộ MỚI\n\n${lines}${more}`;
         }
         if (a.alertType === 'volume') {
             const bars = await vnStockService.getDailyBars(a.ticker, 25);

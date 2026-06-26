@@ -20,20 +20,54 @@ export interface FlowDay {
     sellValue: number;
 }
 
+export interface InsiderTx {
+    ticker: string;
+    person: string;        // who actually transacts
+    role: string;          // their company position, or the relationship if via a related person
+    isRelated: boolean;    // true = transacted by a related person (NLQ) of an insider
+    relatedTo?: string;    // the insider the person is related to
+    side: 'buy' | 'sell' | 'unknown';
+    planVolume: number;    // registered (đăng ký) volume, shares
+    realBuy: number;       // executed buy volume
+    realSell: number;      // executed sell volume
+    beginDate?: string;    // 'yyyy-mm-dd' (registration window)
+    endDate?: string;
+    publishedDate?: string;
+    publishedMs: number;   // epoch ms of the filing (0 if missing) — used for new-filing detection
+}
+
+// Parse Microsoft JSON date "/Date(1782284414940)/" → epoch ms (0 if absent).
+function msDate(s: any): number {
+    const m = /\/Date\((\d+)\)\//.exec(String(s ?? ''));
+    return m ? Number(m[1]) : 0;
+}
+
+// epoch ms → 'yyyy-mm-dd' in VN local time (UTC+7); undefined if 0.
+function vnDate(ms: number): string | undefined {
+    if (!ms) return undefined;
+    return new Date(ms + 7 * 3_600_000).toISOString().slice(0, 10);
+}
+
 interface CacheEntry {
     value: FlowDay[] | null; // null = negative cache (unknown symbol / failure)
+    at: number;
+}
+
+interface InsiderCacheEntry {
+    value: InsiderTx[] | null;
     at: number;
 }
 
 export class CafefService {
     private propCache = new Map<string, CacheEntry>();
     private foreignCache = new Map<string, CacheEntry>();
+    private insiderCache = new Map<string, InsiderCacheEntry>();
 
     private norm(t: string): string {
         return t.toUpperCase().replace(/[^A-Z0-9]/g, '');
     }
 
-    private fresh(e: CacheEntry | undefined): e is CacheEntry {
+    private fresh<T extends { at: number }>(e: T | undefined): e is T {
         return e !== undefined && Date.now() - e.at < TTL_MS;
     }
 
@@ -103,6 +137,49 @@ export class CafefService {
             }
         }
         this.foreignCache.set(symbol, { value: out.length ? out : null, at: Date.now() });
+        return out.slice(0, size);
+    }
+
+    /**
+     * Insider / related-person registered transactions (giao dịch cổ đông nội bộ),
+     * newest-first. CafeF `gdcodong.ashx`. Returns [] on failure (never throws).
+     */
+    async getInsiderTransactions(ticker: string, size = 5): Promise<InsiderTx[]> {
+        const symbol = this.norm(ticker);
+        const cached = this.insiderCache.get(symbol);
+        if (this.fresh(cached)) return cached.value ? cached.value.slice(0, size) : [];
+
+        const url = `${BASE}/gdcodong.ashx?Symbol=${symbol}&PageIndex=1&PageSize=${Math.max(size, 10)}`;
+        const data = await this.fetchJson(url);
+        const rows: any[] = data?.Data?.Data ?? [];
+
+        const out: InsiderTx[] = [];
+        if (Array.isArray(rows)) {
+            for (const r of rows) {
+                const planBuy = Number(r.PlanBuyVolume ?? 0);
+                const planSell = Number(r.PlanSellVolume ?? 0);
+                const side: InsiderTx['side'] = planBuy > 0 ? 'buy' : planSell > 0 ? 'sell' : 'unknown';
+                // When RelatedMan is set, the transactor is a related person (NLQ) of that
+                // insider, and TransactionManPosition holds the *relationship* (e.g. "Con").
+                const isRelated = !!String(r.RelatedMan ?? '').trim();
+                out.push({
+                    ticker: symbol,
+                    person: String(r.TransactionMan ?? '').trim(),
+                    role: String(r.TransactionManPosition ?? '').trim(),
+                    isRelated,
+                    relatedTo: isRelated ? String(r.RelatedMan ?? '').trim() : undefined,
+                    side,
+                    planVolume: side === 'buy' ? planBuy : side === 'sell' ? planSell : 0,
+                    realBuy: Number(r.RealBuyVolume ?? 0),
+                    realSell: Number(r.RealSellVolume ?? 0),
+                    beginDate: vnDate(msDate(r.PlanBeginDate)),
+                    endDate: vnDate(msDate(r.PlanEndDate)),
+                    publishedDate: vnDate(msDate(r.PublishedDate)),
+                    publishedMs: msDate(r.PublishedDate),
+                });
+            }
+        }
+        this.insiderCache.set(symbol, { value: out.length ? out : null, at: Date.now() });
         return out.slice(0, size);
     }
 }

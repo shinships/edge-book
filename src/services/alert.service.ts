@@ -2,7 +2,7 @@ import { db } from '../db';
 import { alerts } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 
-export type AlertType = 'price' | 'foreign' | 'proprietary' | 'volume' | 'rsi' | 'macross';
+export type AlertType = 'price' | 'foreign' | 'proprietary' | 'volume' | 'rsi' | 'macross' | 'insider';
 
 export interface AlertItem {
     id: string;
@@ -101,5 +101,11 @@ export class AlertService {
         await db.update(alerts)
             .set({ status: 'triggered', triggeredAt: new Date() })
             .where(eq(alerts.id, id));
+    }
+
+    // Overwrite an alert's params (used by recurring insider alerts to advance their
+    // last-seen filing marker without flipping the alert to 'triggered').
+    async setParams(id: string, params: Record<string, any>): Promise<void> {
+        await db.update(alerts).set({ params }).where(eq(alerts.id, id));
     }
 }
