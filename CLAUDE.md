@@ -18,7 +18,8 @@
 | AI           | Vertex-Key.com (`openai` SDK) via OpenAI-compatible API — chat `AI_CHAT_MODEL` (default `aws/claude-sonnet-4-6-medium`), fast `AI_FAST_MODEL` (default `free/claude-haiku-4-5`) |
 | Database     | **PostgreSQL (Supabase)** via **Drizzle ORM** (`drizzle-orm` + `postgres` driver); schema in `src/db/schema.ts`, migrations via `drizzle-kit` |
 | Google APIs  | `googleapis` (Calendar v3, Drive v3, Docs v1) |
-| Market data  | Crypto: Binance public REST API (`market.service.ts`). VN stocks: VNDirect public API (`vn-stock.service.ts`) — dchart-api for price/bars, finfo-api for foreign flow + fundamentals. Routed per-ticker by `market-router.ts`. No keys. |
+| Market data  | Crypto: Binance public REST API (`market.service.ts`). VN stocks: VNDirect dchart-api for price/bars (`vn-stock.service.ts`). VN money-flow (khối ngoại + tự doanh + giao dịch nội bộ): CafeF public ajax (`cafef.service.ts`) — finfo-api resolves to a private IP and is unusable from outside the VPC. Routed per-ticker by `market-router.ts`. No keys. |
+| Charts       | `@napi-rs/canvas` — Point & Figure rendered to PNG with a font-free vector renderer (`pnf-image.ts`); the bare Linux container has no font registered |
 | PDF          | `pdfkit` — trade report export (ASCII/English text; built-in fonts can't render VN diacritics) |
 | Auth         | Google Service Account (`service_account.json`) |
 | Config       | `dotenv` (`.env` file)                        |
@@ -55,13 +56,16 @@ edge-book/
 │   │   └── migrate-json-to-db.ts # One-time seed: legacy data/*.json → Postgres (`npm run db:seed`)
 │   ├── services/
 │   │   ├── ai.service.ts       # AI chat, calendar analysis, digest generation, research Q&A
-│   │   ├── alert.service.ts    # Price alerts CRUD (active/triggered) — checked by per-minute cron
+│   │   ├── alert.service.ts    # Price + VN EOD alerts CRUD (price/foreign/proprietary/volume/rsi/macross/insider); setParams for recurring markers
+│   │   ├── cafef.service.ts    # CafeF public ajax: VN foreign + proprietary (tự doanh) net-flow series + insider (giao dịch nội bộ) filings; cached, never throws
 │   │   ├── discipline.service.ts # Discipline mode: loss streak, daily loss limit, cooldown (Sprint 9)
 │   │   ├── google.service.ts   # Calendar, Drive, Docs API wrappers
 │   │   ├── market.service.ts   # Binance public API: batch prices + 24h stats, 45s cache, never throws
 │   │   ├── vn-stock.service.ts # VNDirect public API: VN stock price/bars (dchart) + foreign flow & fundamentals (finfo); cached, never throws
 │   │   ├── market-router.ts    # Routes each ticker to crypto (Binance) or VN (VNDirect) and merges results behind getPrices/get24hStats
 │   │   ├── payment.service.ts  # LemonSqueezy checkout creation, HMAC verify, upgrade logic
+│   │   ├── pnf.service.ts      # Point & Figure computation (columns, box/reversal, double-top/bottom signal, vertical-count target) — pure, no DB/network
+│   │   ├── pnf-image.ts        # Renders a PnfResult → PNG via @napi-rs/canvas (font-free: X/O as vectors, 7-segment price axis)
 │   │   ├── plan.service.ts     # Subscription tier tracking & feature gating
 │   │   ├── portfolio.service.ts # Portfolio position ledger: buy/avg-in, sell+realized PnL, live valuation (Pro+)
 │   │   ├── report.service.ts   # PDF trade report generation via pdfkit (Premium export)
@@ -159,7 +163,7 @@ LemonSqueezy keys are optional; if absent, the international-card option is hidd
 
 All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers in `index.ts`. Message routing uses **regex matching + keyword detection** in this priority order:
 
-1. **Doc management**: `Add Doc <alias> <id>`, `Use Doc <alias>`, `Current Doc` (replies with the active doc's alias + ID + a clickable `docs.google.com` link; falls back to `GOOGLE_DOC_ID` default)
+1. **Doc management**: `Add Doc <alias> <id>`, `Use Doc <alias>`, `List Docs` / `Docs` / `My Docs` (lists every alias + link, ✅ marks active), `Current Doc` (replies with the active doc's alias + ID + a clickable `docs.google.com` link; falls back to `GOOGLE_DOC_ID` default)
 2. **To-Do List**: Quick task management via `Add Task: [content]` and `List Tasks`.
 3. **Research OS commands** (new):
    - `Search: <keyword>` — full-text search in saved research (Pro)
@@ -185,15 +189,23 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
    - `Watchlist` — live price + 24h change per ticker (Binance via `MarketService`)
    - `Alert: <ticker> > <price>` / `Alert: <ticker> < <price>` — price alert (Pro: max 10 active, Premium: unlimited; `k` suffix supported)
    - `Alerts` / `My Alerts` — list active alerts with inline delete buttons (callback `alertdel:<id>`)
-6. **Discipline & Psychology commands** (Sprint 9, Pro — đi cùng `canTrade`):
+6. **VN Smart-Money commands** (Pro, EOD-evaluated — cổ phiếu VN qua CafeF):
+   - `Alert: <ticker> foreign buy [50] [3p]` / `tudoanh buy …` — money-flow alert; `50` = ngưỡng ròng (tỷ đồng), `3p` = ≥3 phiên cùng chiều liên tiếp (threshold/streak tuỳ chọn). Recurring: re-evaluates every session, not one-shot
+   - `Alert: <ticker> volume 2x` / `rsi > 70` / `ma cross` — technical EOD alerts via VNDirect bars (volume vs 20-day avg, Wilder RSI(14), MA20×MA50 golden/death)
+   - `Alert: <ticker> insider` — fires when a NEW insider/related-person filing appears (tracks `lastSeen` published-ms marker in `params`)
+   - `Insider: <ticker>` — list recent insider/related-person registered transactions (đăng ký mua/bán + quan hệ)
+   - `PnF: <ticker> [box] [r<n>]` — Point & Figure chart rendered as a PNG (X/O grid) + buy/sell state + vertical-count price target
+   - `Screener: <criteria> [wl]` / `Screen:` / `Scan:` / `Lọc:` — quét VN30 (hoặc `wl` = watchlist) theo 1 tiêu chí: `oversold`/`overbought`/`rsi<25`, `volume 2`, `golden`/`death`, `pnf buy`/`pnf sell`, `foreign buy`/`tudoanh buy`. Empty → in-chat menu
+   - 💰 **Smart-Money Digest** tự gửi 15:30 mỗi phiên: xếp hạng khối ngoại + tự doanh ròng trên các mã user theo dõi
+7. **Discipline & Psychology commands** (Sprint 9, Pro — đi cùng `canTrade`):
    - **15s safety gate** (mặc định BẬT): `Trade:` không mở lệnh ngay — bot stash params vào `pendingTrades` Map (in-memory) và gửi checklist 3 câu (callback `dchk:<i>`) + nút Vào lệnh (`dgo`, chỉ pass khi tick đủ 3 + đã qua 15s; TTL 10 phút) + Huỷ (`dcancel`)
    - `Trade:` nhận thêm token `emo <1-10>` (emotion score) và `hr <bpm>` (heart rate); thiếu `emo` → bot gửi keyboard 1-10 sau khi mở lệnh (callback `emo:<tradeId>:<n>` / `emoskip:`); `emo ≥ 8` hoặc `hr ≥ 110` → cảnh báo cortisol/adrenaline, khuyên rời màn hình
    - `Close:` lệnh lỗ → streak +1, nhắc giảm 50% risk (tính sẵn con số từ `riskPercent`/`positionSize`); đủ `dailyLossLimit` lệnh thua/ngày (mặc định 3) → khoá `Trade:` tới hết ngày VN; đồng thời hỏi "có tuân thủ kế hoạch không?" (callback `audit:<tradeId>:<1|0>`) → phản hồi vị tha nếu Có, không phán xét nếu Không
    - `Discipline` (status) / `Discipline On` / `Discipline Off` · `Limit: <1-10>` (giới hạn thua/ngày) · `Review`/`Audit` (đối soát chủ động các lệnh đóng hôm nay)
-7. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
-8. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
-9. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc. For Premium users, also runs `ThesisService.findConflicts()` and sends a conflict alert if the new item contradicts an active thesis.
-10. **Default**: Falls through to AI chat with per-user session
+8. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
+9. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
+10. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc. For Premium users, also runs `ThesisService.findConflicts()` and sends a conflict alert if the new item contradicts an active thesis.
+11. **Default**: Falls through to AI chat with per-user session
 
 ### Photo Handler
 
@@ -213,7 +225,9 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 - **TodoService**: Persists to Postgres (`todos`). Supports completion by index (1-based) or keyword search.
 - **TradeService**: Persists to Postgres (`trades`). Manages the Trade Journal — open/close trades, auto-computes PnL% (price- or percent-based, direction-aware), and aggregates stats (win rate, total PnL, avg planned RR, best/worst). Pro-gated via `canTrade`. Trade Journal 2.0 fields: `positionSize`, `riskPercent`, `feePercent` (net PnL after fee), `setupTag`, `closeReason` ('tp'|'sl'|'manual'), plus `actualR()` (R-multiple). Also supports **research-to-trade link** (`linkResearch`/`getTradeById`, `linkedResearch: string[]` on each trade) — Premium-gated via `canLinkResearch`. On `Close:`, Premium users get an inline keyboard of recent research matching the ticker (callback `linkres:<tradeId>:<researchId>`); the `Trades` list shows a 🔗N tag for trades with links. Also provides **advanced analytics** (`getAnalytics` → breakdown by ticker/direction/month + avg hold duration over closed trades) — Premium-gated via `canAnalytics`, surfaced by the `Trade Analytics` command with an AI insight from `AIService.generateTradeInsight`.
 - **ThesisService**: Persists to Postgres (`theses`). Records per-user theses (`ticker`, `stance` bullish/bearish, `text`) and detects contradictions: `findConflicts(userId, ticker, sentiment)` returns active theses whose stance is clearly opposed to a newly-saved research item's sentiment (±0.2 threshold) and bumps their `conflictCount`. Wired into the Save/forward flow in `index.ts`; Premium-gated via `canThesis`. Detection is rule-based (no AI call on the save hot path).
-- **AlertService** *(new, Sprint 8)*: Persists to Postgres (`alerts`). Price alert CRUD — `addAlert` (above/below + target), `getActiveAlerts`, `getAllActive` (for the cron), `deleteAlert`, `markTriggered`. Gated by `PlanLimits.maxActiveAlerts`.
+- **AlertService** *(Sprint 8, extended)*: Persists to Postgres (`alerts`). Alert CRUD — `addAlert` (above/below + target + `alertType` + `params` jsonb), `getActiveAlerts`, `getAllActive` (for the cron), `deleteAlert`, `markTriggered`, and `setParams` (overwrite `params` without flipping status — used by recurring insider alerts to advance their `lastSeen` filing marker). `AlertType` = `price | foreign | proprietary | volume | rsi | macross | insider`. Gated by `PlanLimits.maxActiveAlerts`.
+- **CafefService** *(new)*: **No DB** — VN money-flow + insider data from CafeF public ajax (`cafef.vn/du-lieu/ajax/pagenew/datahistory/*.ashx`, no key). `getForeignSeries`/`getProprietarySeries` (per-session net buy/sell history, newest-first → enables streak + threshold), `getInsiderTransactions` (đăng ký giao dịch nội bộ + người liên quan). Exported `flowStreak(days, side)` counts consecutive same-sign sessions. 5-min cache, 8s timeout, best-effort, never throws. Must hit the canonical `cafef.vn` host (the `s.cafef.vn` alias 301-drops the query); finfo-api is avoided because it resolves to a private IP.
+- **PnfService / pnf-image** *(new)*: `PnfService.compute(bars, opts?)` builds Point & Figure columns (High/Low method, default box by price, 3-box reversal), detects double-top/bottom `signal`, and estimates a vertical-count `priceTarget` — pure, no DB/network, with a box-size guard (accepts a user box only if the resulting span is 3–500 boxes, else auto). `renderPnfImage(result, ticker)` rasterises the last columns to a PNG via `@napi-rs/canvas`, **font-free** (X = diagonal strokes, O = ring, price axis = 7-segment digits) because the Railway container has no registered font. Pro-gated via `maxActiveAlerts > 0`.
 - **WatchlistService** *(new, Sprint 8)*: Persists to Postgres (`watchlist_items`, unique index user+ticker). `add` (onConflictDoNothing → 'added'|'exists'), `remove`, `getWatchlist`. Gated by `PlanLimits.maxWatchlist`.
 - **MarketService** *(new, Sprint 8)*: **No DB** — live crypto prices from Binance public REST API (no key). `getPrices()` (batch, used by per-minute alert cron) and `get24hStats()` (Watchlist). Maps ticker → `<BASE>USDT` symbol, 45s in-memory cache with negative-caching, 8s timeout, batch endpoint with per-symbol fallback. Best-effort: never throws, returns partial/empty maps on failure.
 - **DisciplineService** *(new, Sprint 9)*: Persists to Postgres (`discipline_state`, 1 row/user, auto-created with defaults: enabled, limit 3). Tracks loss streak (`recordLoss`/`recordWin`), daily loss counter (VN-timezone date string, lazy reset on read), `dailyLossLimit`, and `cooldownUntil` (set to end of VN day when the limit is hit). The 15s safety gate itself is in-memory in `index.ts` (`pendingTrades` Map), not in this service. Trade journal psychology fields (`emotionScore`, `heartRate`, `disciplined`) live on `trades` and are managed by `TradeService.setEmotion`/`setDisciplined`; `getStats()` exposes `disciplinedPnl` (PnL minus undisciplined "lucky" wins), `disciplineRate`, and `getAnalytics()` adds `byEmotion` (calm ≤5 vs stressed ≥7, requires ≥3 scored trades).
@@ -238,7 +252,11 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 | Export | ❌ | ❌ | ✅ |
 | Watchlist | 3 tickers | Unlimited | Unlimited |
 | Price Alerts | ❌ | 10 active | Unlimited |
-| VN Alerts (foreign/volume/RSI/MA) | ❌ | ✅ | ✅ |
+| VN Alerts (foreign/tự doanh/volume/RSI/MA/insider) | ❌ | ✅ | ✅ |
+| Smart-Money Digest (15:30) | ❌ | ✅ | ✅ |
+| Insider lookup (`Insider:`) | ❌ | ✅ | ✅ |
+| Point & Figure (`PnF:`) | ❌ | ✅ | ✅ |
+| Screener (VN30 scan) | ❌ | ✅ | ✅ |
 | Portfolio (danh mục) | ❌ | ✅ | ✅ |
 | Max Docs | 1 | 5 | Unlimited |
 
@@ -255,7 +273,11 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 
 **Weekly Report** — a `node-cron` job runs at **18:00 every Sunday (Asia/Ho_Chi_Minh)** that, for each digest-eligible (Pro/Premium) user with research in the last 7 days, builds `getWeeklyReportData()` and sends an AI report (`AIService.generateWeeklyReport()`) highlighting per-ticker sentiment shift vs the previous week.
 
-**Price Alert Checker** — a `node-cron` job runs **every minute** (`* * * * *`): loads all active alerts (`AlertService.getAllActive()`), batch-fetches prices via `MarketService.getPrices()`, marks hit alerts as triggered, and DMs the owner. Guarded by an in-flight flag (`alertCronBusy`) so overlapping runs are skipped.
+**Price Alert Checker** — a `node-cron` job runs **every minute** (`* * * * *`): loads all active alerts (`AlertService.getAllActive()`), batch-fetches prices via `MarketService.getPrices()`, marks hit alerts as triggered, and DMs the owner. Guarded by an in-flight flag (`alertCronBusy`) so overlapping runs are skipped. Only `price`-type alerts are evaluated here; the non-`price` VN alerts are skipped and handled by the EOD cron below.
+
+**VN EOD Alert Checker** — a `node-cron` job runs at **15:15 ICT, weekdays** (`15 15 * * 1-5`, after HOSE/HNX close): evaluates every non-`price` active alert via `evaluateEodAlert()` (foreign/proprietary streak+threshold via CafeF, volume/RSI/MA-cross via VNDirect bars, insider new-filing detection), DMs the owner on a hit. One-shot alerts are marked triggered before sending; **recurring** money-flow alerts (`params.recurring === true`) stay active and re-evaluate each session. Guarded by `vnAlertCronBusy`.
+
+**Smart-Money Digest** — a `node-cron` job runs at **15:30 ICT, weekdays** (`30 15 * * 1-5`): for each digest-eligible (Pro+) user, ranks the latest-session foreign + proprietary net flow across the VN tickers they track (watchlist ∪ portfolio ∪ alerts, `trackedVnTickers()`) and DMs the top movers (`buildSmartMoneyDigest()`). Guarded by `smartMoneyCronBusy`.
 
 **EOD Process Audit** — a `node-cron` job runs at **21:00 daily (Asia/Ho_Chi_Minh)**: for each user with trades (`TradeService.getAllUserIds()`) who is Pro+ and has discipline mode enabled, sends up to 5 unaudited trades closed today (`getUnauditedClosedToday()`) with ✅/❌ process-audit buttons (callback `audit:<tradeId>:<1|0>`) — the "perfect trader" ledger.
 
