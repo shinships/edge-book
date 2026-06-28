@@ -516,6 +516,7 @@ bot.command('help', (ctx) => {
         '• 💰 Digest dòng tiền lớn tự gửi 15:30 mỗi phiên (NN + tự doanh mã bạn theo dõi)\n' +
         '• 📐 PnF: HPG — đồ thị Point & Figure (X/O) + tín hiệu mua/bán, giá mục tiêu\n' +
         '• 👔 Insider: HPG — giao dịch nội bộ + người liên quan · Alert: HPG insider (báo ĐK mới)\n' +
+        '• 🔍 Screener: oversold / golden / pnf buy / foreign buy — quét VN30 (thêm wl: chỉ watchlist)\n' +
         '\n' +
         '📊 Danh mục (Pro)\n' +
         '• Buy: HPG 1000 @ 25.5 (b:) · Sell: HPG 500 @ 28 (s:)\n' +
@@ -1592,6 +1593,62 @@ bot.on('message:text', async (ctx) => {
         }
     }
 
+    // Quick Screener (Pro) — quét VN30 (hoặc watchlist) theo 1 tiêu chí kỹ thuật/dòng tiền.
+    {
+        const sm = text.match(/^(?:screener|screen|scan|lọc|loc)\s*:?\s*(.*)$/i);
+        if (sm) {
+            const limits = await planService.getLimits(userId);
+            if (limits.maxActiveAlerts === 0) {
+                await ctx.reply('🔒 Screener là tính năng Pro. Gõ /upgrade để mở khoá!');
+                return;
+            }
+            const rest = sm[1].trim();
+            if (!rest) {
+                await ctx.reply(
+                    '🔍 Screener nhanh — quét VN30 theo 1 tiêu chí:\n\n' +
+                    '• Screener: oversold (RSI ≤ 30) · overbought · rsi < 25\n' +
+                    '• Screener: volume 2 (vol ≥ 2x TB20)\n' +
+                    '• Screener: golden / death (MA20 x MA50)\n' +
+                    '• Screener: pnf buy / pnf sell\n' +
+                    '• Screener: foreign buy / tudoanh buy (dòng tiền lớn)\n\n' +
+                    'Thêm wl để chỉ quét watchlist, vd: Screener: oversold wl'
+                );
+                return;
+            }
+            const useWatchlist = /\b(wl|watchlist|theo dõi|theo doi|danh mục|danh muc)\b/i.test(rest);
+            const filterRaw = rest.replace(/\b(wl|watchlist|theo dõi|theo doi|danh mục|danh muc)\b/ig, '').trim();
+            const f = parseScreenFilter(filterRaw);
+            if (!f) {
+                await ctx.reply('⚠️ Chưa hiểu tiêu chí. Gõ Screener (không kèm gì) để xem các tiêu chí hỗ trợ.');
+                return;
+            }
+            let universe = useWatchlist ? await trackedVnTickers(userId) : VN30_UNIVERSE;
+            if (universe.length === 0) {
+                await ctx.reply('📭 Watchlist của bạn chưa có mã VN nào để quét. Thêm bằng Watch: HPG.');
+                return;
+            }
+            universe = universe.slice(0, 30);
+            await ctx.replyWithChatAction('typing');
+            const hits = (await Promise.all(universe.map((t) => evalScreen(t, f)))).filter((h): h is ScreenHit => h !== null);
+            if (f.id === 'oversold') hits.sort((a, b) => a.metric - b.metric);
+            else hits.sort((a, b) => b.metric - a.metric);
+            const scope = useWatchlist ? 'watchlist' : 'VN30';
+            if (hits.length === 0) {
+                await ctx.reply(`🔍 Screener · ${f.label}\nKhông có mã nào trong ${scope} khớp tiêu chí (đã quét ${universe.length} mã).`);
+                return;
+            }
+            const lines = hits.slice(0, 15).map((h, i) => `${i + 1}. ${h.ticker} — ${h.note}`);
+            const more = hits.length > 15 ? `\n…và ${hits.length - 15} mã khác` : '';
+            await ctx.reply(
+                `🔍 Screener · ${f.label}\n` +
+                `Quét ${scope} (${universe.length} mã) → ${hits.length} mã khớp:\n\n` +
+                `${lines.join('\n')}${more}\n\n` +
+                `Xem chi tiết: PnF: ${hits[0].ticker} · Insider: ${hits[0].ticker}`
+            );
+            return;
+        }
+    }
+
     // VN stock alerts (Pro, evaluated end-of-day): khối ngoại / volume / RSI / MA cross.
     // Matched BEFORE the generic price alert so multi-token forms aren't misparsed.
     {
@@ -2314,6 +2371,120 @@ function computeRSI(closes: number[], period = 14): number | null {
     if (avgLoss === 0) return 100;
     const rs = avgGain / avgLoss;
     return 100 - 100 / (1 + rs);
+}
+
+// --- QUICK SCREENER (#12) ---
+// Curated large-cap VN universe (VN30-ish). Used as the default scan set so the screener
+// surfaces fresh ideas, not just what the user already tracks.
+const VN30_UNIVERSE = [
+    'ACB', 'BCM', 'BID', 'BVH', 'CTG', 'FPT', 'GAS', 'GVR', 'HDB', 'HPG',
+    'MBB', 'MSN', 'MWG', 'PLX', 'POW', 'SAB', 'SHB', 'SSB', 'SSI', 'STB',
+    'TCB', 'TPB', 'VCB', 'VHM', 'VIB', 'VIC', 'VJC', 'VNM', 'VPB', 'VRE',
+];
+
+type ScreenFilterId =
+    | 'oversold' | 'overbought' | 'volume' | 'golden' | 'death'
+    | 'pnf_buy' | 'pnf_sell' | 'foreign_buy' | 'foreign_sell' | 'prop_buy' | 'prop_sell';
+
+interface ParsedScreen { id: ScreenFilterId; threshold?: number; label: string; }
+interface ScreenHit { ticker: string; metric: number; note: string; }
+
+// Parse a free-text screener criterion into a structured filter. null = unrecognised.
+function parseScreenFilter(raw: string): ParsedScreen | null {
+    const s = raw.toLowerCase().trim();
+    let m: RegExpMatchArray | null;
+    if ((m = s.match(/rsi\s*[<≤]\s*(\d{1,3})/))) return { id: 'oversold', threshold: Number(m[1]), label: `RSI ≤ ${m[1]} (quá bán)` };
+    if ((m = s.match(/rsi\s*[>≥]\s*(\d{1,3})/))) return { id: 'overbought', threshold: Number(m[1]), label: `RSI ≥ ${m[1]} (quá mua)` };
+    if (/oversold|quá bán|qua ban|rsi thấp|rsi thap/.test(s)) return { id: 'oversold', threshold: 30, label: 'RSI ≤ 30 (quá bán)' };
+    if (/overbought|quá mua|qua mua|rsi cao/.test(s)) return { id: 'overbought', threshold: 70, label: 'RSI ≥ 70 (quá mua)' };
+    if (/golden|cắt lên|cat len|ma.?up/.test(s)) return { id: 'golden', label: 'Golden cross (MA20 cắt lên MA50)' };
+    if (/death|cắt xuống|cat xuong|ma.?down/.test(s)) return { id: 'death', label: 'Death cross (MA20 cắt xuống MA50)' };
+    if (/(?:p&f|pnf|point.?and.?figure)\s*(?:buy|mua)/.test(s)) return { id: 'pnf_buy', label: 'P&F tín hiệu MUA (double-top)' };
+    if (/(?:p&f|pnf|point.?and.?figure)\s*(?:sell|bán|ban)/.test(s)) return { id: 'pnf_sell', label: 'P&F tín hiệu BÁN (double-bottom)' };
+    if (/(?:foreign|nn|ngoại|ngoai|khối ngoại|khoi ngoai)\s*(?:buy|mua)/.test(s)) return { id: 'foreign_buy', label: 'Khối ngoại MUA ròng phiên gần nhất' };
+    if (/(?:foreign|nn|ngoại|ngoai|khối ngoại|khoi ngoai)\s*(?:sell|bán|ban)/.test(s)) return { id: 'foreign_sell', label: 'Khối ngoại BÁN ròng phiên gần nhất' };
+    if (/(?:tudoanh|td|tự doanh|tu doanh|prop)\s*(?:buy|mua)/.test(s)) return { id: 'prop_buy', label: 'Tự doanh MUA ròng phiên gần nhất' };
+    if (/(?:tudoanh|td|tự doanh|tu doanh|prop)\s*(?:sell|bán|ban)/.test(s)) return { id: 'prop_sell', label: 'Tự doanh BÁN ròng phiên gần nhất' };
+    if ((m = s.match(/(?:volume|vol|thanh khoản|thanh khoan)\s*(\d+(?:\.\d+)?)?/))) {
+        const thr = m[1] ? Number(m[1]) : 2;
+        return { id: 'volume', threshold: thr, label: `Volume ≥ ${thr}x TB20` };
+    }
+    return null;
+}
+
+// Evaluate one ticker against a screener filter. Best-effort; null = no match / no data.
+async function evalScreen(ticker: string, f: ParsedScreen): Promise<ScreenHit | null> {
+    try {
+        switch (f.id) {
+            case 'oversold':
+            case 'overbought': {
+                const bars = await vnStockService.getDailyBars(ticker, 40);
+                const rsi = computeRSI(bars.map((b) => b.c), 14);
+                if (rsi === null) return null;
+                const thr = f.threshold ?? (f.id === 'oversold' ? 30 : 70);
+                const hit = f.id === 'oversold' ? rsi <= thr : rsi >= thr;
+                if (!hit) return null;
+                return { ticker, metric: rsi, note: `RSI ${rsi.toFixed(0)}` };
+            }
+            case 'volume': {
+                const bars = await vnStockService.getDailyBars(ticker, 25);
+                if (bars.length < 21) return null;
+                const today = bars[bars.length - 1];
+                const avg = sma(bars.slice(-21, -1).map((b) => b.v), 20);
+                if (avg === null || avg <= 0) return null;
+                const mult = today.v / avg;
+                if (mult < (f.threshold ?? 2)) return null;
+                return { ticker, metric: mult, note: `${mult.toFixed(1)}x vol` };
+            }
+            case 'golden':
+            case 'death': {
+                const closes = (await vnStockService.getDailyBars(ticker, 60)).map((b) => b.c);
+                const ma20 = sma(closes, 20);
+                const ma50 = sma(closes, 50);
+                const ma20p = sma(closes.slice(0, -1), 20);
+                const ma50p = sma(closes.slice(0, -1), 50);
+                if (ma20 === null || ma50 === null || ma20p === null || ma50p === null) return null;
+                const golden = ma20p <= ma50p && ma20 > ma50;
+                const death = ma20p >= ma50p && ma20 < ma50;
+                if (f.id === 'golden' ? !golden : !death) return null;
+                return { ticker, metric: Math.abs(ma20 - ma50), note: f.id === 'golden' ? 'Golden cross' : 'Death cross' };
+            }
+            case 'pnf_buy':
+            case 'pnf_sell': {
+                const bars = await vnStockService.getDailyBars(ticker, 260);
+                if (bars.length < 20) return null;
+                const r = pnfService.compute(bars.map((b) => ({ h: b.h, l: b.l, c: b.c })));
+                if (!r) return null;
+                const want = f.id === 'pnf_buy' ? 'buy' : 'sell';
+                if (r.signal !== want) return null;
+                return { ticker, metric: r.lastPrice, note: want === 'buy' ? 'P&F mua' : 'P&F bán' };
+            }
+            case 'foreign_buy':
+            case 'foreign_sell':
+            case 'prop_buy':
+            case 'prop_sell': {
+                const isProp = f.id.startsWith('prop');
+                const side: 'buy' | 'sell' = f.id.endsWith('buy') ? 'buy' : 'sell';
+                const days = isProp
+                    ? await cafefService.getProprietarySeries(ticker, 5)
+                    : await cafefService.getForeignSeries(ticker, 5);
+                if (days.length === 0) return null;
+                const latest = days[0];
+                const ok = side === 'buy' ? latest.netValue > 0 : latest.netValue < 0;
+                if (!ok) return null;
+                if (f.threshold && Math.abs(latest.netValue) < f.threshold * 1e9) return null;
+                const streak = flowStreak(days, side);
+                return {
+                    ticker,
+                    metric: Math.abs(latest.netValue),
+                    note: `${fmtVnd(Math.abs(latest.netValue))}đ${streak > 1 ? ` ·${streak}p` : ''}`,
+                };
+            }
+        }
+    } catch {
+        return null;
+    }
+    return null;
 }
 
 // Evaluate a single EOD alert against fresh VN data. Returns a trigger message, or null
