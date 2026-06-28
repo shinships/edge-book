@@ -53,7 +53,23 @@
 - `SEPAY_ACCOUNT_NUMBER`/`SEPAY_BANK_CODE`/`SEPAY_API_KEY` (bật `/upgrade` VietQR cho user VN). Đăng ký SePay, link tài khoản nhận tiền, cấu hình webhook `https://<domain>/webhook/sepay` với API key trong dashboard SePay.
 - ✅ Multi-instance: sau khi chuyển sang PostgreSQL, giới hạn "chỉ 1 instance" đã được gỡ (không còn JSON race condition).
 
-**Sprint kế tiếp (ứng viên):** Phase 4 — Team workspace, role-based access, Webhook/API.
+### Nâng cấp ứng viên — cổ phiếu VN *(brainstorm 2026-06-29, chưa build)*
+
+Tiếp nối cụm cổ phiếu VN (smart-money + P&F + insider + screener). Xếp theo đòn bẩy giữ chân/thu phí × độ khả thi dữ liệu.
+
+| # | Hạng mục | Mô tả | Khả thi | Ưu tiên |
+|---|---|---|---|---|
+| A | **TA card — `TA: HPG`** | 1 thẻ gộp: giá+%, RSI(14), vị trí MA20/50/200, volume vs TB20, hỗ trợ/kháng cự, tín hiệu P&F, streak NN/tự doanh | ✅ Tái dùng 100% chỉ báo sẵn có, **không cần nguồn mới** | 🥇 Làm trước (rẻ, giá trị cao) |
+| B | **Lịch sự kiện DN** | Ngày GDKHQ, cổ tức tiền/CP, ĐHCĐ, ngày chốt quyền, phát hành thêm; auto-push cho mã watchlist/portfolio (vd "HPG GDKHQ sau 3 ngày, cổ tức 5%") | ⚠️ Cần spike endpoint CafeF events | 🥇 Động lực giữ chân định kỳ mạnh nhất |
+| C | **Cảnh báo danh mục (Portfolio)** | Digest P&L danh mục cuối phiên + alert khi vị thế chạm TP/SL | ✅ Tận dụng `portfolio_positions` + giá VNDirect, **không cần nguồn mới** | 🥈 |
+| D | **Định giá cơ bản — `Fund: HPG`** | P/E, P/B, ROE, EPS, vốn hóa, cổ tức/năm + so sánh TB ngành | ⚠️ finfo VNDirect bị chặn → spike CafeF fundamentals | 🥈 |
+| E | **Bản đồ nhiệt ngành & dòng tiền** | Top tăng/giảm, ngành NN đang gom (mở rộng Smart-Money Digest lên cấp ngành) | 🟡 Cần danh sách mã theo ngành | 🥉 |
+| F | **Tóm tắt tin tức theo mã (AI)** | Kéo tin CafeF theo mã → AI tóm tắt | ⚠️ Spike news endpoint | 🥉 |
+| G | **Backtest tín hiệu đơn giản** | "Mua khi P&F buy / bán khi sell" → lời/lỗ các kỳ qua | ✅ Dùng bars + pnf.service sẵn có | 🥉 |
+
+> **Khuyến nghị thứ tự:** A (TA card) → B (lịch sự kiện, sau khi spike nguồn) → C (portfolio alerts). A và C không cần nguồn dữ liệu mới nên build được ngay.
+
+**Sprint kế tiếp (ứng viên):** Phase 4 — Team workspace, role-based access, Webhook/API. *(Song song: cụm nâng cấp cổ phiếu VN ở trên — ưu tiên A/B/C cho thị trường VN trước khi mở Team/API.)*
 
 > 📌 Cần smoke-test Sprint 9 trên bot thật (`Trade:` → checklist 15s → emo prompt; `Close:` lỗ → giảm size + audit vị tha; `Limit:`/`Discipline Off`; chờ cron 21:00 audit "perfect trader").
 >
