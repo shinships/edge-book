@@ -56,7 +56,26 @@ export const config = {
 
     // --- Database ---
     databaseUrl: process.env.DATABASE_URL || '',
+
+    // --- Google OAuth (per-user Docs, bỏ bước share service-account email) ---
+    // Khi đủ clientId + secret + encKey, bot bật flow OAuth: user đăng nhập Google,
+    // bot tự tạo Doc trong Drive của user. Thiếu bất kỳ key nào → OAuth tắt, Connect
+    // Docs fallback về hướng dẫn share SA email cũ.
+    googleOAuthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
+    googleOAuthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
+    // Public base URL của webhook server (Railway). Redirect URI = <base>/oauth/google/callback.
+    oauthPublicBaseUrl: (process.env.OAUTH_PUBLIC_BASE_URL || '').replace(/\/+$/, ''),
+    // 32-byte key (hex 64 ký tự hoặc base64) để mã hoá refresh token AES-256-GCM.
+    tokenEncKey: process.env.TOKEN_ENC_KEY || '',
 };
+
+// OAuth chỉ bật khi đủ 4 thành phần — tránh tạo authUrl lỗi hoặc lưu token không mã hoá được.
+export const oauthEnabled = Boolean(
+    config.googleOAuthClientId &&
+    config.googleOAuthClientSecret &&
+    config.oauthPublicBaseUrl &&
+    config.tokenEncKey
+);
 
 
 if (!config.telegramBotToken) {

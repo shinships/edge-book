@@ -2,6 +2,21 @@ import express from 'express';
 import { Bot } from 'grammy';
 import { config } from './config';
 import { SepayService, SepayWebhookPayload } from './services/sepay.service';
+import { GoogleOAuthService } from './services/google-oauth.service';
+
+// Minimal HTML page shown in the user's browser after the OAuth redirect.
+function oauthResultPage(ok: boolean, message: string): string {
+    const color = ok ? '#16a34a' : '#dc2626';
+    const icon = ok ? '✅' : '⚠️';
+    return `<!doctype html><html lang="vi"><head><meta charset="utf-8">` +
+        `<meta name="viewport" content="width=device-width, initial-scale=1">` +
+        `<title>EdgeBook</title></head>` +
+        `<body style="font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 20px;text-align:center">` +
+        `<div style="font-size:48px">${icon}</div>` +
+        `<h2 style="color:${color}">${message}</h2>` +
+        `<p style="color:#555">Bạn có thể đóng tab này và quay lại Telegram.</p>` +
+        `</body></html>`;
+}
 
 // Báo cho admin (ADMIN_USER_IDS) khi có giao dịch SePay vào tài khoản nhưng
 // không tự nâng cấp được (sai nội dung CK, hoặc chuyển thiếu tiền) — tránh
@@ -36,11 +51,44 @@ async function sendUpgradeDm(bot: Bot, userId: number, tier: 'pro' | 'premium', 
     );
 }
 
-export function startWebhookServer(sepayService: SepayService, bot: Bot): void {
+export function startWebhookServer(sepayService: SepayService, bot: Bot, oauthService: GoogleOAuthService): void {
     const app = express();
 
     app.get('/health', (_req, res) => {
         res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    });
+
+    // Google OAuth redirect — exchanges the code, stores the encrypted refresh token,
+    // creates the user's research doc, then DMs them the doc link.
+    app.get('/oauth/google/callback', async (req, res) => {
+        const code = req.query.code as string | undefined;
+        const state = req.query.state as string | undefined;
+        const error = req.query.error as string | undefined;
+
+        if (error || !code || !state) {
+            return res.status(400).send(oauthResultPage(false, 'Kết nối bị huỷ hoặc thiếu thông tin.'));
+        }
+
+        try {
+            const result = await oauthService.handleCallback(code, state);
+            if (!result) {
+                return res.status(400).send(oauthResultPage(false, 'Không xác thực được. Hãy thử Connect Docs lại.'));
+            }
+
+            res.send(oauthResultPage(true, 'Đã kết nối Google Docs!'));
+
+            const docLink = result.docId ? `\n🔗 https://docs.google.com/document/d/${result.docId}/edit` : '';
+            const who = result.email ? ` (${result.email})` : '';
+            await bot.api.sendMessage(
+                result.userId,
+                `✅ Đã kết nối Google Docs${who}!\n` +
+                `Mọi forward / Save: từ giờ sẽ tự được lưu vào Doc của bạn.${docLink}`,
+                { link_preview_options: { is_disabled: true } },
+            ).catch((err) => console.error(`OAuth connect DM failed for ${result.userId}:`, err));
+        } catch (err) {
+            console.error('OAuth callback error:', err);
+            res.status(500).send(oauthResultPage(false, 'Có lỗi khi kết nối. Hãy thử lại sau.'));
+        }
     });
 
     // TODO(intl-payments): Re-add the /webhook/lemonsqueezy endpoint here for international cards.

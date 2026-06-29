@@ -1,7 +1,8 @@
 import { Bot, Context, InlineKeyboard, InputFile } from 'grammy';
-import { config } from './config';
+import { config, oauthEnabled } from './config';
 import { AIService } from './services/ai.service';
 import { GoogleService, GoogleApiError } from './services/google.service';
+import { GoogleOAuthService } from './services/google-oauth.service';
 import { UserService } from './services/user.service';
 import { TodoService } from './services/todo.service';
 import { ResearchService } from './services/research.service';
@@ -29,6 +30,7 @@ import cron from 'node-cron';
 const bot = new Bot(config.telegramBotToken);
 const aiService = new AIService();
 const googleService = new GoogleService();
+const oauthService = new GoogleOAuthService();
 const todoService = new TodoService();
 const userService = new UserService();
 const researchService = new ResearchService();
@@ -208,6 +210,21 @@ const pendingTrades = new Map<number, PendingTrade>();
 const SAFETY_DELAY_MS = 15_000;
 const PENDING_TTL_MS = 10 * 60_000;
 
+// Users who tapped "Connect Docs" and are expected to paste a Google Doc URL next.
+// Map<userId, expiresAt>. TTL avoids accidentally swallowing a doc URL the user
+// shares hours later in a different context. In-memory: not durable, but the cost
+// of losing it is small (user just types Connect Docs again).
+const pendingDocConnect = new Map<number, number>();
+const PENDING_DOC_CONNECT_TTL_MS = 30 * 60_000;
+const DOC_URL_RE = /docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{20,})/;
+
+function isPendingDocConnect(userId: number): boolean {
+    const exp = pendingDocConnect.get(userId);
+    if (!exp) return false;
+    if (Date.now() > exp) { pendingDocConnect.delete(userId); return false; }
+    return true;
+}
+
 const SAFETY_CHECKLIST = [
     'Đúng setup trong kế hoạch?',
     'Risk đúng kế hoạch, không tăng size gỡ lỗ?',
@@ -355,6 +372,54 @@ function stripWrappers(s: string): string {
     return s.replace(/^[\[\(<"'`]+/, '').replace(/[\]\)>"'`]+$/, '').trim();
 }
 
+async function sendConnectDocsInstructions(ctx: Context, userId: number): Promise<void> {
+    // Preferred path: OAuth one-tap — bot tạo Doc trong Drive của user, không cần
+    // share service-account email thủ công.
+    if (oauthEnabled) {
+        const existing = await oauthService.getConnection(userId);
+        if (existing) {
+            const link = existing.docId ? `\n🔗 ${docUrl(existing.docId)}` : '';
+            await ctx.reply(
+                `✅ Bạn đã kết nối Google Docs rồi${existing.email ? ` (${existing.email})` : ''}.${link}\n` +
+                `Gõ Disconnect Docs nếu muốn ngắt.`,
+                { link_preview_options: { is_disabled: true } },
+            );
+            return;
+        }
+        const url = oauthService.getAuthUrl(userId);
+        const kb = new InlineKeyboard().url('🔗 Kết nối bằng tài khoản Google', url);
+        await ctx.reply(
+            '📎 Kết nối Google Docs (tuỳ chọn)\n\n' +
+            'Bấm nút dưới, đăng nhập Google và đồng ý — bot sẽ tự tạo 1 Doc EdgeBook Research ' +
+            'trong Drive của bạn và lưu mọi research vào đó. Không cần copy ID hay share email.',
+            { reply_markup: kb },
+        );
+        return;
+    }
+
+    // Fallback (OAuth chưa cấu hình): hướng dẫn share service-account email thủ công.
+    const sa = googleService.getServiceAccountEmail();
+    if (!sa) {
+        await ctx.reply(
+            '📎 Kết nối Google Docs (tuỳ chọn)\n\n' +
+            'Bot đang thiếu thông tin service account — không thể hướng dẫn share email. ' +
+            'Liên hệ admin hoặc dùng Add Doc [tên] [ID] thủ công.'
+        );
+        return;
+    }
+    pendingDocConnect.set(userId, Date.now() + PENDING_DOC_CONNECT_TTL_MS);
+    await ctx.reply(
+        '📎 <b>Kết nối Google Docs</b> (tuỳ chọn)\n\n' +
+        'Bot sẽ append research vào 1 Doc của riêng bạn — tiện để backup / chia sẻ.\n\n' +
+        '<b>3 bước:</b>\n' +
+        '1) Tạo 1 Google Doc trống (hoặc dùng doc có sẵn)\n' +
+        '2) Mở Doc → Share → paste email này (quyền <b>Editor</b>):\n' +
+        `   <code>${sa}</code>   ← chạm để copy\n` +
+        '3) Copy URL của Doc rồi paste vào đây — bot tự nhận ID',
+        { parse_mode: 'HTML' }
+    );
+}
+
 async function docSyncErrorReason(error: any, docId: string): Promise<string> {
     if (error instanceof GoogleApiError && error.status === 403) {
         const sa = googleService.getServiceAccountEmail();
@@ -468,13 +533,14 @@ bot.command('start', async (ctx) => {
         'Research OS cho trader, sống ngay trong Telegram.\n' +
         '\n' +
         '✨ Nổi bật:\n' +
-        '📥 Forward tin → tự gắn tag ticker, chấm sentiment & lưu Docs\n' +
+        '📥 Forward tin → tự gắn tag ticker, chấm sentiment\n' +
         '📊 Daily Digest + Weekly Report tổng hợp research bằng AI\n' +
         '🔍 Search & Ask: hỏi AI ngay trên kho research của bạn\n' +
         '📈 Trade Journal: log lệnh, tính PnL, win rate, analytics\n' +
         '🧠 Thesis tracker: cảnh báo khi tin mới mâu thuẫn luận điểm\n' +
         trialHint +
-        '\nGõ /help để xem tất cả lệnh.'
+        '\n👉 Thử ngay: forward 1 bài báo bất kỳ vào đây — bot tự tag & lưu.\n' +
+        'Gõ /help để xem tất cả lệnh.'
     );
 });
 
@@ -490,11 +556,9 @@ bot.command('help', (ctx) => {
         '\n' +
         '💬 Chat & cá nhân\n' +
         '• Hỏi AI bất kỳ về trading/đầu tư (free 1, Pro 20, Premium 60/ngày)\n' +
+        '• Save: [nội dung] hoặc forward tin/ảnh → tự tag + lưu (sv:)\n' +
+        '• Recent — xem 10 research mới nhất\n' +
         '• Call me [tên] · My job is [nghề]\n' +
-        '\n' +
-        '💾 Docs & lưu\n' +
-        '• Save: [nội dung] hoặc forward tin/ảnh → tự tag + lưu Docs (sv:)\n' +
-        '• Add Doc [tên] [ID] · Use Doc [tên] · List Docs · Current Doc\n' +
         '\n' +
         '✅ To-Do & lịch\n' +
         '• + [việc] · List Tasks · Complete Task: [số]\n' +
@@ -530,7 +594,11 @@ bot.command('help', (ctx) => {
         '• Portfolio (pf) · Position: HPG\n' +
         '\n' +
         '💳 Tài khoản\n' +
-        '• /plan · /upgrade · /invite (mời bạn, cả hai +7 ngày Pro)'
+        '• /plan · /upgrade · /invite (mời bạn, cả hai +7 ngày Pro)\n' +
+        '\n' +
+        '💾 Google Docs (tuỳ chọn — backup ra Doc)\n' +
+        '• Connect Docs — kết nối 1 chạm (tự tạo Doc) · Disconnect Docs\n' +
+        '• New Doc [tên] — tạo thêm doc · Use Doc [số|tên] · List Docs · Current Doc'
     );
 });
 
@@ -662,6 +730,95 @@ bot.on('message:text', async (ctx) => {
     // Expand quick shortcuts (skip forwarded messages — those go to research save).
     if (!isForwarded(ctx.message)) text = expandShortcut(text);
 
+    // --- CONNECT DOCS FLOW (paste-URL step) ---
+    // If user just tapped "Connect Docs" and is expected to paste a doc URL,
+    // intercept BEFORE the save handler so the URL isn't stored as research.
+    if (isPendingDocConnect(userId) && !isForwarded(ctx.message)) {
+        const m = text.match(DOC_URL_RE);
+        if (m) {
+            pendingDocConnect.delete(userId);
+            const docId = m[1];
+            await userService.setDocAlias(userId, 'docs', docId);
+            try {
+                await googleService.appendToDocs(docId, '[EdgeBook connected ✅]');
+                await ctx.reply(
+                    `✅ Đã kết nối Google Docs!\n` +
+                    `Mọi forward / Save: từ giờ sẽ được append vào doc này.\n` +
+                    `🔗 ${docUrl(docId)}`,
+                    { link_preview_options: { is_disabled: true } }
+                );
+            } catch (error) {
+                await ctx.reply(
+                    `⚠️ Đã lưu ID nhưng chưa append được.${await docSyncErrorReason(error, docId)}\n` +
+                    `Sau khi sửa quyền, gõ Current Doc để xác nhận.`,
+                    { link_preview_options: { is_disabled: true } }
+                );
+            }
+            return;
+        }
+        // Not a doc URL — fall through (user may have changed their mind / pasted something else).
+        // Don't clear the flag; let them try again or use other commands.
+    }
+
+    // --- RECENT / NOTES: list newest research in Telegram ---
+    if (/^(recent|notes|my notes|gần đây)$/i.test(text)) {
+        const items = await researchService.getNewest(userId, 10);
+        if (items.length === 0) {
+            await ctx.reply('📝 Chưa có research nào. Forward 1 bài báo hoặc gõ Save: [nội dung] để thử.');
+            return;
+        }
+        const lines = items.map((it, i) => {
+            const d = new Date(it.createdAt);
+            const dateStr = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+            const tickerStr = it.tickers.length > 0 ? ` 🏷️ ${it.tickers.join(',')}` : '';
+            const preview = it.content.replace(/\s+/g, ' ').slice(0, 80);
+            return `${i + 1}) ${dateStr}${tickerStr}\n   ${preview}${it.content.length > 80 ? '…' : ''}`;
+        });
+        await ctx.reply(`📝 Research gần đây (${items.length})\n\n${lines.join('\n\n')}`);
+        return;
+    }
+
+    // --- CONNECT DOCS (entry point) ---
+    if (/^connect docs$/i.test(text)) {
+        await sendConnectDocsInstructions(ctx, userId);
+        return;
+    }
+
+    if (/^disconnect docs$/i.test(text)) {
+        const ok = await oauthService.disconnect(userId);
+        await ctx.reply(ok
+            ? '🔌 Đã ngắt kết nối Google Docs. Research vẫn được lưu trong bot (Recent / Search / Ask vẫn chạy).'
+            : '⚠️ Bạn chưa kết nối Google Docs qua OAuth. (Gõ Connect Docs để kết nối.)');
+        return;
+    }
+
+    // New Doc <tên> — chỉ cho user đã kết nối OAuth: bot tạo doc mới trong Drive của
+    // user, thêm vào danh sách và đặt làm active. (drive.file scope chỉ ghi được vào
+    // doc do bot tạo, nên không trỏ được doc user tự tạo sẵn.)
+    const newDocMatch = text.match(/^new doc\s+(.+)$/i);
+    if (newDocMatch) {
+        const name = stripWrappers(newDocMatch[1]).slice(0, 100);
+        const conn = await oauthService.getConnection(userId);
+        if (!conn) {
+            await ctx.reply('⚠️ Cần kết nối Google trước. Gõ Connect Docs.');
+            return;
+        }
+        if (!name) {
+            await ctx.reply('⚠️ Cú pháp: New Doc tên-doc');
+            return;
+        }
+        const doc = await oauthService.createDoc(userId, name);
+        if (doc) {
+            await ctx.reply(
+                `✅ Đã tạo doc "${doc.name}" và đặt làm doc đang dùng.\n🔗 ${docUrl(doc.id)}`,
+                { link_preview_options: { is_disabled: true } }
+            );
+        } else {
+            await ctx.reply('⚠️ Tạo doc thất bại. Thử lại hoặc Connect Docs lại.');
+        }
+        return;
+    }
+
     // --- DOCS MANAGEMENT COMMANDS ---
     const addDocMatch = text.match(/^add doc\s+(\S+)\s+(\S+)/i);
     if (addDocMatch) {
@@ -677,6 +834,24 @@ bot.on('message:text', async (ctx) => {
     }
 
     if (['list docs', 'docs', 'my docs'].includes(text.toLowerCase())) {
+        // OAuth-connected users manage their OAuth docs here (research goes to these).
+        const conn = await oauthService.getConnection(userId);
+        if (conn) {
+            if (conn.docs.length === 0) {
+                await ctx.reply('📚 Chưa có doc nào. Gõ New Doc tên-doc để tạo.');
+                return;
+            }
+            const lines = conn.docs.map((d, i) => {
+                const active = d.id === conn.docId ? ' ✅ (đang dùng)' : '';
+                return `${i + 1}) ${d.name}${active}\n   🔗 ${docUrl(d.id)}`;
+            });
+            await ctx.reply(
+                `📚 Docs của bạn (${conn.docs.length})\n\n${lines.join('\n\n')}\n\n` +
+                `Chuyển: Use Doc [số|tên] · Tạo mới: New Doc [tên]`,
+                { link_preview_options: { is_disabled: true } }
+            );
+            return;
+        }
         const user = await userService.getUser(userId);
         const entries = Object.entries(user.docAliases ?? {});
         if (entries.length === 0) {
@@ -701,18 +876,44 @@ bot.on('message:text', async (ctx) => {
         return;
     }
 
-    const setDocMatch = text.match(/^use doc\s+(\S+)/i);
+    const setDocMatch = text.match(/^use doc\s+(.+)$/i);
     if (setDocMatch) {
-        const alias = stripWrappers(setDocMatch[1]);
-        if (await userService.setActiveDoc(userId, alias)) {
-            await ctx.reply(`✅ Switched to Doc: ${alias}`);
+        const arg = stripWrappers(setDocMatch[1]);
+        // OAuth-connected users switch among their OAuth docs (by index or name).
+        const conn = await oauthService.getConnection(userId);
+        if (conn) {
+            const doc = await oauthService.setActiveDoc(userId, arg);
+            if (doc) {
+                await ctx.reply(`✅ Đang dùng doc: ${doc.name}\n🔗 ${docUrl(doc.id)}`,
+                    { link_preview_options: { is_disabled: true } });
+            } else {
+                await ctx.reply('⚠️ Không tìm thấy doc đó. Gõ List Docs để xem số thứ tự.');
+            }
+            return;
+        }
+        if (await userService.setActiveDoc(userId, arg)) {
+            await ctx.reply(`✅ Switched to Doc: ${arg}`);
         } else {
-            await ctx.reply(`⚠️ Doc "${alias}" not found. Use Add Doc first.`);
+            await ctx.reply(`⚠️ Doc "${arg}" not found. Use Add Doc first.`);
         }
         return;
     }
 
     if (text.toLowerCase() === 'current doc') {
+        // OAuth connection takes priority — it's where research actually goes.
+        const oauthConn = await oauthService.getConnection(userId);
+        if (oauthConn) {
+            const activeDoc = oauthConn.docs.find((d) => d.id === oauthConn.docId);
+            const nameLine = activeDoc ? `\n📄 ${activeDoc.name}` : '';
+            const link = oauthConn.docId ? `\n🔗 ${docUrl(oauthConn.docId)}` : '';
+            const more = oauthConn.docs.length > 1 ? `\n(${oauthConn.docs.length} doc · chuyển: Use Doc [số])` : '';
+            await ctx.reply(
+                `📂 Current Doc: Google${oauthConn.email ? ` (${oauthConn.email})` : ''}${nameLine}${link}${more}\n` +
+                `Tạo thêm: New Doc [tên] · Ngắt: Disconnect Docs`,
+                { link_preview_options: { is_disabled: true } }
+            );
+            return;
+        }
         const activeId = await userService.getActiveDocId(userId);
         if (activeId) {
             const alias = await userService.getActiveDocAlias(userId);
@@ -2139,8 +2340,24 @@ bot.on('message:text', async (ctx) => {
             ? `\n${sentimentEmoji} Sentiment: ${researchItem.sentiment > 0 ? '+' : ''}${researchItem.sentiment.toFixed(2)}`
             : '';
 
-        // --- Also save to Google Docs ---
-        if (targetDocId) {
+        // --- Save to Google Docs ---
+        // Ưu tiên OAuth doc của user; chưa connect → SA / active doc; cuối cùng chỉ DB.
+        const oauthAppend = await oauthService.appendForUser(userId, content);
+        if (oauthAppend === 'ok') {
+            try {
+                await ctx.api.setMessageReaction(ctx.chat.id, ctx.message.message_id, [{ type: 'emoji', emoji: '❤' }]);
+                if (tagInfo || catInfo) {
+                    await ctx.reply(`📊 Research saved!${tagInfo}${catInfo}${sentimentInfo}`);
+                }
+            } catch (e) {
+                await ctx.reply(`✅ Đã lưu vào Google Doc của bạn${tagInfo}${catInfo}${sentimentInfo}`);
+            }
+        } else if (oauthAppend === 'revoked') {
+            await ctx.reply(
+                `✅ Research saved!${tagInfo}${catInfo}${sentimentInfo}\n` +
+                `⚠️ Mất quyền ghi Google Docs (có thể bạn đã gỡ quyền). Gõ Connect Docs để kết nối lại.`
+            );
+        } else if (targetDocId) {
             try {
                 await googleService.appendToDocs(targetDocId, `${content}`);
                 const source = isForward ? 'forwarded message' : 'content';
@@ -2156,7 +2373,23 @@ bot.on('message:text', async (ctx) => {
                 await ctx.reply(`✅ Research saved locally${tagInfo}${catInfo}${sentimentInfo}${await docSyncErrorReason(error, targetDocId)}`);
             }
         } else {
-            await ctx.reply(`✅ Research saved!${tagInfo}${catInfo}${sentimentInfo}\n💡 Tip: Add Doc [name] [ID] để sync với Google Docs.`);
+            await ctx.reply(`✅ Research saved!${tagInfo}${catInfo}${sentimentInfo}`);
+
+            // One-time Docs nag: shown exactly when user reaches 5 saves, unless dismissed.
+            const user = await userService.getUser(userId);
+            if (!user.docsHintDismissed) {
+                const stats = await researchService.getStats(userId);
+                if (stats.totalItems === 5) {
+                    const kb = new InlineKeyboard()
+                        .text('📎 Kết nối Google Docs', 'connectdocs').row()
+                        .text('❌ Không, dùng Telegram là đủ', 'connectdocs:skip');
+                    await ctx.reply(
+                        '💡 Bạn đã lưu 5 research. Muốn backup tự động vào Google Doc riêng?\n' +
+                        '(Tuỳ chọn — Search/Ask/Digest đều chạy được không cần Docs.)',
+                        { reply_markup: kb }
+                    );
+                }
+            }
         }
 
         // Show remaining quota for free users
@@ -2817,6 +3050,27 @@ bot.callbackQuery(/^linkres_skip:.+$/, async (ctx) => {
     await ctx.editMessageText('👍 Đã bỏ qua link research.');
 });
 
+// --- CONNECT DOCS CALLBACKS (from the count-based nag) ---
+bot.callbackQuery('connectdocs', async (ctx) => {
+    const userId = ctx.from?.id;
+    await ctx.answerCallbackQuery();
+    if (!userId) return;
+    try {
+        await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+    } catch { /* message may be too old to edit */ }
+    await sendConnectDocsInstructions(ctx, userId);
+});
+
+bot.callbackQuery('connectdocs:skip', async (ctx) => {
+    const userId = ctx.from?.id;
+    await ctx.answerCallbackQuery({ text: '👍 Sẽ không nhắc lại.' });
+    if (!userId) return;
+    await userService.dismissDocsHint(userId);
+    try {
+        await ctx.editMessageText('👍 OK, dùng Telegram là đủ. (Vẫn có thể gõ Connect Docs sau này.)');
+    } catch { /* edit failed, no-op */ }
+});
+
 // Delete-alert callbacks (from the Alerts list)
 bot.callbackQuery(/^alertdel:(.+)$/, async (ctx) => {
     const userId = ctx.from?.id;
@@ -3004,7 +3258,7 @@ bot.catch((err) => {
 });
 
 // Start webhook server (runs alongside bot polling)
-startWebhookServer(sepayService, bot);
+startWebhookServer(sepayService, bot, oauthService);
 
 // Start the bot
 bot.start({

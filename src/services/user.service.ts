@@ -16,6 +16,9 @@ export interface UserProfile {
     // Growth / attribution
     acquisitionSource?: string;
     createdAt?: string;
+
+    // Onboarding nag-gate (Docs hint shown once at 5 saves; user can dismiss)
+    docsHintDismissed?: boolean;
 }
 
 type UserRow = typeof users.$inferSelect;
@@ -30,6 +33,7 @@ function toProfile(row: UserRow): UserProfile {
         activeDocId: row.activeDocId ?? undefined,
         docAliases: (row.docAliases as Record<string, string>) ?? {},
         acquisitionSource: row.acquisitionSource ?? undefined,
+        docsHintDismissed: row.docsHintDismissed ?? false,
         createdAt: row.createdAt?.toISOString() ?? undefined,
     };
 }
@@ -129,5 +133,10 @@ export class UserService {
         if (!user.activeDocId || !user.docAliases) return undefined;
         return Object.keys(user.docAliases)
             .find((a) => user.docAliases![a] === user.activeDocId);
+    }
+
+    async dismissDocsHint(id: number): Promise<void> {
+        await this.getUser(id);
+        await db.update(users).set({ docsHintDismissed: true }).where(eq(users.id, id));
     }
 }

@@ -9,6 +9,7 @@ export const users = pgTable('users', {
     activeDocId: text('active_doc_id'),
     docAliases: jsonb('doc_aliases').$type<Record<string, string>>().notNull(),
     acquisitionSource: text('acquisition_source'),
+    docsHintDismissed: boolean('docs_hint_dismissed').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }),
 });
 
@@ -130,6 +131,19 @@ export const referrals = pgTable('referrals', {
     status: text('status').notNull(),   // 'pending' | 'rewarded'
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
     rewardedAt: timestamp('rewarded_at', { withTimezone: true }),
+});
+
+// Per-user Google OAuth credentials. One row/user. The refresh token is stored
+// AES-256-GCM encrypted (never plaintext). `docId` is the "EdgeBook Research" doc
+// the bot created in the user's own Drive on first connect.
+export const googleOauthTokens = pgTable('google_oauth_tokens', {
+    userId: bigint('user_id', { mode: 'number' }).primaryKey(),
+    refreshTokenEnc: text('refresh_token_enc').notNull(),   // format: iv:authTag:ciphertext (base64)
+    docId: text('doc_id'),                                  // ACTIVE doc — research appends here
+    docs: jsonb('docs').$type<{ id: string; name: string }[]>(),  // all docs the bot created for this user
+    email: text('email'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
 });
 
 export const todos = pgTable('todos', {

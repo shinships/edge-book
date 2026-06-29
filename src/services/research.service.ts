@@ -227,6 +227,15 @@ export class ResearchService {
         return all.filter((item) => item.categories.includes(lowerCat));
     }
 
+    async getNewest(userId: number, limit = 10): Promise<ResearchItem[]> {
+        const rows = await db.select()
+            .from(researchItems)
+            .where(eq(researchItems.userId, userId))
+            .orderBy(desc(researchItems.createdAt))
+            .limit(limit);
+        return rows.map(toItem);
+    }
+
     async getRecentItems(userId: number, hours = 24): Promise<ResearchItem[]> {
         const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
         const rows = await db.select()
