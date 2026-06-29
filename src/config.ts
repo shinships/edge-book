@@ -42,8 +42,9 @@ export const config = {
     sepayBankCode: process.env.SEPAY_BANK_CODE || '',
     sepayAccountHolder: process.env.SEPAY_ACCOUNT_HOLDER || '',
     sepayApiKey: process.env.SEPAY_API_KEY || '',
-    sepayProPriceVnd: parseInt(process.env.SEPAY_PRO_PRICE_VND || '199000', 10),
-    sepayPremiumPriceVnd: parseInt(process.env.SEPAY_PREMIUM_PRICE_VND || '499000', 10),
+    sepayProPriceVnd: parseInt(process.env.SEPAY_PRO_PRICE_VND || '99000', 10),
+    sepayPremiumPriceVnd: parseInt(process.env.SEPAY_PREMIUM_PRICE_VND || '199000', 10),
+    sepayTrialPriceVnd: parseInt(process.env.SEPAY_TRIAL_PRICE_VND || '19000', 10),
 
     // --- Admin ---
     // Telegram user IDs with admin privileges (always treated as Premium).

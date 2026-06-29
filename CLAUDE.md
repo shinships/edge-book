@@ -148,8 +148,9 @@ EdgeBook can run as a background Windows service (auto-start on boot, auto-resta
 | `SEPAY_BANK_CODE`             | Optional | SePay bank short code (e.g. `MBBank`, `Vietcombank`) for VietQR generation |
 | `SEPAY_ACCOUNT_HOLDER`        | Optional | Account holder name shown on the generated QR |
 | `SEPAY_API_KEY`               | Optional | SePay webhook API key, verified as `Authorization: Apikey <key>` |
-| `SEPAY_PRO_PRICE_VND`         | Optional | Pro price in VND (default `199000`)      |
-| `SEPAY_PREMIUM_PRICE_VND`     | Optional | Premium price in VND (default `499000`)  |
+| `SEPAY_PRO_PRICE_VND`         | Optional | Pro price in VND (default `99000`)       |
+| `SEPAY_PREMIUM_PRICE_VND`     | Optional | Premium price in VND (default `199000`)  |
+| `SEPAY_TRIAL_PRICE_VND`       | Optional | Trial Pack 7 ngày Pro, VND (default `19000`) |
 | `ADMIN_USER_IDS`              | Optional | Comma-separated Telegram user IDs treated as admins (always Premium access) |
 
 `TELEGRAM_BOT_TOKEN`, `VERTEX_KEY_API_KEY` (in `config.ts`) and `DATABASE_URL` (in `src/db/index.ts`) are validated on startup — app exits if missing.
@@ -233,11 +234,13 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 - **DisciplineService** *(new, Sprint 9)*: Persists to Postgres (`discipline_state`, 1 row/user, auto-created with defaults: enabled, limit 3). Tracks loss streak (`recordLoss`/`recordWin`), daily loss counter (VN-timezone date string, lazy reset on read), `dailyLossLimit`, and `cooldownUntil` (set to end of VN day when the limit is hit). The 15s safety gate itself is in-memory in `index.ts` (`pendingTrades` Map), not in this service. Trade journal psychology fields (`emotionScore`, `heartRate`, `disciplined`) live on `trades` and are managed by `TradeService.setEmotion`/`setDisciplined`; `getStats()` exposes `disciplinedPnl` (PnL minus undisciplined "lucky" wins), `disciplineRate`, and `getAnalytics()` adds `byEmotion` (calm ≤5 vs stressed ≥7, requires ≥3 scored trades).
 - **ReportService** *(new)*: Generates a trade performance **PDF** with `pdfkit` (in-memory `Buffer`, sent via grammY `InputFile`). Renders a header banner, summary, a drawn monthly-PnL bar chart, by-ticker/by-direction tables, and a closed-trade log with multi-page support (`bufferPages: true` for the footer pass). PDF text is **ASCII/English** — pdfkit's built-in fonts can't render Vietnamese diacritics, so `index.ts` runs the trader name through a `toAscii()` helper. Premium-gated via `canExport`.
 - **PaymentService**: LemonSqueezy checkout — `createCheckoutLink(userId, tier)` passes `user_id`/`tier` as `custom_data` so the webhook can identify the buyer; `verifyWebhookSignature()` (HMAC-SHA256 over the raw body); `handleWebhookEvent()` validates `order_created`/`paid`, checks `plans.lsOrderId` for idempotency, then `planService.upgradePlan(userId, tier, 30, orderId)`.
-- **SepayService** *(new, Sprint 10)*: VietQR bank-transfer payment for VN users — **no pending-order table**. `generateQuote(userId, tier)` builds a `qr.sepay.vn/img` URL with a payment content string `EBOOK<userId><PRO|PRE>` encoding the buyer + tier directly, plus the VND amount (`SEPAY_PRO_PRICE_VND`/`SEPAY_PREMIUM_PRICE_VND`). `verifyAuth()` checks the `Authorization: Apikey <SEPAY_API_KEY>` header SePay sends with each webhook. `handleWebhookEvent()` parses that content back out of the transaction `content`/`description`, checks `transferAmount` against the expected price, dedupes via `plans.sepayTxId` (unique), then `planService.upgradePlan(userId, tier, 30, undefined, txId)`.
+- **SepayService** *(new, Sprint 10, extended Pricing v2)*: VietQR bank-transfer payment for VN users — **no pending-order table**. `generateQuote(userId, tier)` builds a `qr.sepay.vn/img` URL with a payment content string `EBOOK<userId><PRO|PRE|TRI>` encoding the buyer + tier directly, plus the VND amount (`SEPAY_PRO_PRICE_VND`/`SEPAY_PREMIUM_PRICE_VND`/`SEPAY_TRIAL_PRICE_VND`). `verifyAuth()` checks the `Authorization: Apikey <SEPAY_API_KEY>` header SePay sends with each webhook. `handleWebhookEvent()` parses that content back out of the transaction `content`/`description`, checks `transferAmount` against the expected price, dedupes via `plans.sepayTxId` (unique), then routes: `PRO`/`PRE` → `planService.upgradePlan(userId, tier, 30, undefined, txId)`, `TRI` → `planService.activateTrial(userId, txId)` which sets `tier='pro'` + `expires_at=now+7d` + `trial_used_at=now` once per user (returns `trial_reused` on second attempt → webhook DMs user + admin for manual refund, no auto-refund).
 
 ### Subscription Tiers
 
-| Feature | Free | Pro ($9.99/mo) | Premium ($24.99/mo) |
+> **Pricing v2 (2026-06-29):** Pro **99.000đ/tháng**, Premium **199.000đ/tháng**, và **Trial Pack 19.000đ / 7 ngày Pro** (1 lần/user, không auto gia hạn). Trial activate qua nội dung CK `EBOOK<userId>TRI` → `PlanService.activateTrial` set tier=pro + `trial_used_at`. Khi free user chưa dùng trial gõ `/upgrade`, nút "🎁 Trial 7 ngày — 19k" hiện ở hàng đầu.
+
+| Feature | Free | Pro (99.000đ/mo) | Premium (199.000đ/mo) |
 |---|---|---|---|
 | Forwards/day | 10 | Unlimited | Unlimited |
 | Search & Tag | ❌ | ✅ | ✅ |

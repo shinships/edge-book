@@ -32,6 +32,7 @@
 | **Giao dịch nội bộ (insider)** | ✅ 2026-06-27 — `Insider: <ticker>` liệt kê đăng ký giao dịch cổ đông nội bộ + người liên quan (CafeF `gdcodong.ashx`); `Alert: HPG insider` báo khi có filing MỚI (mốc `lastSeen` published-ms trong `params`, recurring). Pro. |
 | **Screener nhanh (#12)** | ✅ 2026-06-28 — `Screener: <tiêu chí> [wl]` quét **VN30** (hoặc watchlist) theo 1 tiêu chí, tái dùng chỉ báo có sẵn: RSI quá mua/bán (`oversold`/`rsi<25`), volume spike, golden/death cross, tín hiệu P&F, khối ngoại/tự doanh mua-bán ròng. Song song tối đa 30 mã, best-effort. Pro. |
 | **List Docs** | ✅ 2026-06-28 — `List Docs` / `Docs` / `My Docs` liệt kê mọi alias doc đã thêm kèm link, ✅ đánh dấu doc đang active. |
+| **Pricing v2 + Trial Pack** | ✅ 2026-06-29 (code) — hạ giá: Pro **199k → 99k/tháng**, Premium **499k → 199k/tháng**. Thêm **Trial Pack 19k / 7 ngày Pro** (mã CK `EBOOK<uid>TRI`), 1 lần/user (cột mới `plans.trial_used_at`). `/upgrade` hiện nút Trial cho free user chưa dùng; webhook `trial_reused` → DM user + admin để hoàn tay. `/start` cho user mới có dòng gợi ý trial. ⏳ Còn lại: `npm run db:push` để thêm cột (đổi `.env` sang session pooler 5432 trước). |
 
 > **Tầng 2 (Research Hub / Phase 2) và Tầng 3 (Trade Journal / Phase 3) đều hoàn tất 100%.** Sprint 7 (DB Migration), Sprint 8 (Trade Journal 2.0 + Alerts/Watchlist), Sprint 9 (Discipline & Psychology OS) đã hoàn tất, Sprint 10 (SePay VietQR) đã code xong (chờ config thật), **DB Supabase đã live** (2026-06-10), và **cluster cổ phiếu VN** (smart-money + P&F + insider + screener, dữ liệu CafeF/VNDirect) đã live (2026-06). Sẵn sàng mở Phase 4 (Team & API).
 
@@ -215,6 +216,8 @@ Sentiment: 🟡 Neutral (5/10)
 ---
 
 ## 4. Pricing Strategy
+
+> **Cập nhật 2026-06-29 (Pricing v2):** Giá VND tháng đã hạ — Pro **99.000đ**, Premium **199.000đ**. Thêm **Trial Pack 19.000đ / 7 ngày Pro** (1 lần/user, không tự gia hạn) làm bước đệm thấp. Mô hình bậc thang USD ($9.99 / $24.99) giữ làm tham chiếu cho phương án quốc tế (LemonSqueezy) tương lai — hiện tại `/upgrade` chỉ chạy SePay VietQR.
 
 ### Mô hình Freemium + Tiered
 

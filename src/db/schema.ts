@@ -22,6 +22,7 @@ export const plans = pgTable('plans', {
     lsOrderId: text('ls_order_id').unique(),
     sepayTxId: text('sepay_tx_id').unique(),
     digestEnabled: boolean('digest_enabled').notNull().default(true),
+    trialUsedAt: timestamp('trial_used_at', { withTimezone: true }),
 });
 
 export const researchItems = pgTable('research_items', {

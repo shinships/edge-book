@@ -16,6 +16,7 @@ export interface UserPlan {
     lsOrderId?: string;
     sepayTxId?: string;
     digestEnabled: boolean;
+    trialUsedAt?: string;
 }
 
 export interface PlanLimits {
@@ -103,6 +104,7 @@ function toPlan(row: PlanRow): UserPlan {
         lsOrderId: row.lsOrderId ?? undefined,
         sepayTxId: row.sepayTxId ?? undefined,
         digestEnabled: row.digestEnabled,
+        trialUsedAt: row.trialUsedAt?.toISOString(),
     };
 }
 
@@ -238,6 +240,33 @@ export class PlanService {
         await db.update(plans).set(set).where(eq(plans.userId, userId));
     }
 
+    async hasUsedTrial(userId: number): Promise<boolean> {
+        const plan = await this.getPlan(userId);
+        return !!plan.trialUsedAt;
+    }
+
+    // Trial Pack 19k / 7 ngày Pro — 1 lần/user. Riêng khỏi upgradePlan vì cần
+    // atomic check + set trialUsedAt, và không nên cộng dồn nếu user đang Pro
+    // (trial chỉ dành cho free user, gate ở /upgrade UI).
+    async activateTrial(userId: number, txId: string): Promise<{ ok: true } | { ok: false; reason: 'already_used' }> {
+        const plan = await this.getPlan(userId);
+        if (plan.trialUsedAt) {
+            return { ok: false, reason: 'already_used' };
+        }
+
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+        await db.update(plans).set({
+            tier: 'pro',
+            expiresAt,
+            trialUsedAt: now,
+            sepayTxId: txId,
+        }).where(eq(plans.userId, userId));
+
+        return { ok: true };
+    }
+
     // Grant bonus days on top of the user's current plan (referral rewards,
     // milestones) without ever downgrading tier. Extends expiresAt from "now"
     // or from the existing expiry, whichever is later.
@@ -312,6 +341,9 @@ export class PlanService {
 
         if (!admin && tier === 'free') {
             info += `\n\n💡 Upgrade để mở khoá Search, Digest và nhiều hơn nữa!\n👉 Gõ /upgrade để xem các gói`;
+            if (!plan.trialUsedAt) {
+                info += `\n🎁 Trial 7 ngày Pro (19k) còn dùng được — chọn trong /upgrade`;
+            }
         }
 
         return info;

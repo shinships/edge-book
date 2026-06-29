@@ -444,6 +444,7 @@ async function maybeRewardReferral(userId: number): Promise<void> {
 // Basic Command Handlers
 bot.command('start', async (ctx) => {
     const userId = ctx.from?.id;
+    let trialHint = '';
     if (userId) {
         const payload = ctx.match;
         const source = parseAcquisitionSource(payload);
@@ -454,6 +455,12 @@ bot.command('start', async (ctx) => {
             if (Number.isInteger(referrerId) && referrerId !== userId) {
                 await referralService.record(referrerId, userId);
             }
+        }
+
+        // Gợi ý trial cho user mới chưa từng dùng — bước đệm thấp dẫn lên Pro.
+        if (isNew && sepayService.isConfigured() && !(await planService.hasUsedTrial(userId))) {
+            const trialPrice = sepayService.getPrice('trial').toLocaleString('vi-VN');
+            trialHint = `\n🎁 Mới? Trải nghiệm full Pro 7 ngày chỉ ${trialPrice}đ — gõ /upgrade rồi chọn Trial.\n`;
         }
     }
     return ctx.reply(
@@ -466,8 +473,8 @@ bot.command('start', async (ctx) => {
         '🔍 Search & Ask: hỏi AI ngay trên kho research của bạn\n' +
         '📈 Trade Journal: log lệnh, tính PnL, win rate, analytics\n' +
         '🧠 Thesis tracker: cảnh báo khi tin mới mâu thuẫn luận điểm\n' +
-        '\n' +
-        'Gõ /help để xem tất cả lệnh.'
+        trialHint +
+        '\nGõ /help để xem tất cả lệnh.'
     );
 });
 
@@ -583,10 +590,16 @@ bot.command('upgrade', async (ctx) => {
         return;
     }
 
-    const keyboard = new InlineKeyboard()
-        .text('⭐ Pro', 'upgrade_pro')
-        .row()
-        .text('💎 Premium', 'upgrade_premium');
+    // Trial chỉ hiện cho user free chưa từng dùng — gate kép (UI + activateTrial check)
+    // để khoá đường tắt lạm dụng.
+    const trialAvailable = plan.tier === 'free' && !plan.trialUsedAt;
+    const trialPrice = `${sepayService.getPrice('trial').toLocaleString('vi-VN')}đ`;
+
+    const keyboard = new InlineKeyboard();
+    if (trialAvailable) {
+        keyboard.text(`🎁 Trial 7 ngày — ${trialPrice}`, 'upgrade_trial').row();
+    }
+    keyboard.text('⭐ Pro', 'upgrade_pro').row().text('💎 Premium', 'upgrade_premium');
 
     const currentTierText = plan.tier === 'pro'
         ? 'Bạn đang dùng ⭐ Pro. Upgrade lên 💎 Premium để mở khoá Sentiment & Export.'
@@ -595,8 +608,13 @@ bot.command('upgrade', async (ctx) => {
     const proPrice = `${sepayService.getPrice('pro').toLocaleString('vi-VN')}đ/tháng`;
     const premiumPrice = `${sepayService.getPrice('premium').toLocaleString('vi-VN')}đ/tháng`;
 
+    const trialLine = trialAvailable
+        ? `🎁 Trial 7 ngày (${trialPrice}): full quyền Pro, sau 7 ngày tự về Free, không tự động gia hạn, chỉ mua được 1 lần.\n\n`
+        : '';
+
     await ctx.reply(
         `💳 Nâng cấp EdgeBook\n\n${currentTierText}\n\n` +
+        trialLine +
         `⭐ Pro (${proPrice}):\n• Unlimited forwards\n• Search & Tag\n• Daily Digest\n• Ask AI\n\n` +
         `💎 Premium (${premiumPrice}):\n• Tất cả Pro features\n• Sentiment scoring\n• Export research\n• Unlimited Docs`,
         { reply_markup: keyboard }
@@ -2714,16 +2732,19 @@ cron.schedule('0 21 * * *', async () => {
 });
 
 // Send a SePay VietQR code for direct bank-transfer payment (VN users)
-async function sendSepayQuote(ctx: Context, userId: number, tier: 'pro' | 'premium'): Promise<void> {
+async function sendSepayQuote(ctx: Context, userId: number, tier: 'pro' | 'premium' | 'trial'): Promise<void> {
     const { qrUrl, amount, content } = sepayService.generateQuote(userId, tier);
-    const tierLabel = tier === 'pro' ? '⭐ Pro' : '💎 Premium';
+    const tierLabel = tier === 'pro' ? '⭐ Pro' : tier === 'premium' ? '💎 Premium' : '🎁 Trial Pro 7 ngày';
+    const trailer = tier === 'trial'
+        ? `Quét mã hoặc chuyển khoản đúng nội dung và số tiền trên. Hệ thống tự kích hoạt Trial Pro 7 ngày trong vài giây.\n\n⚠️ Trial chỉ mua được 1 lần. Hết 7 ngày tự về Free, không tự động gia hạn hay trừ tiền thêm.`
+        : `Quét mã hoặc chuyển khoản đúng nội dung và số tiền trên. Hệ thống tự nhận diện và nâng cấp plan trong vài giây, không cần làm gì thêm.`;
 
     await ctx.replyWithPhoto(qrUrl, {
         caption:
             `${tierLabel} — Chuyển khoản VietQR\n\n` +
             `Số tiền: ${amount.toLocaleString('vi-VN')}đ\n` +
             `Nội dung CK: ${content}\n\n` +
-            `Quét mã hoặc chuyển khoản đúng nội dung và số tiền trên. Hệ thống tự nhận diện và nâng cấp plan trong vài giây, không cần làm gì thêm.`,
+            trailer,
     });
 }
 
@@ -2740,6 +2761,19 @@ bot.callbackQuery('upgrade_premium', async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) return;
     await sendSepayQuote(ctx, userId, 'premium');
+});
+
+bot.callbackQuery('upgrade_trial', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const userId = ctx.from?.id;
+    if (!userId) return;
+    // Re-check ngay tại callback time để chặn race: user mở 2 chat /upgrade,
+    // mua trial ở chat A, rồi bấm Trial ở chat B — UI cũ vẫn còn nút.
+    if (await planService.hasUsedTrial(userId)) {
+        await ctx.reply('⚠️ Bạn đã dùng gói Trial trước đó. Vui lòng chọn Pro (99k) hoặc Premium (199k) qua /upgrade.');
+        return;
+    }
+    await sendSepayQuote(ctx, userId, 'trial');
 });
 
 // Research-to-trade link callbacks (Premium)

@@ -65,6 +65,25 @@ export function startWebhookServer(sepayService: SepayService, bot: Bot): void {
             if (result.status === 'upgraded') {
                 const priceLabel = `${sepayService.getPrice(result.tier as 'pro' | 'premium').toLocaleString('vi-VN')}đ`;
                 await sendUpgradeDm(bot, result.userId, result.tier as 'pro' | 'premium', priceLabel);
+            } else if (result.status === 'trial_activated') {
+                await bot.api.sendMessage(
+                    result.userId,
+                    `🎁 Trial Pro 7 ngày đã kích hoạt!\n\n` +
+                    `⭐ Bạn được full quyền Pro trong 7 ngày: Unlimited forwards, Search & Tag, Daily Digest, Ask AI, Trade Journal, Watchlist & Alerts.\n\n` +
+                    `Hết 7 ngày plan tự về Free (không tự động trừ tiền). Thích thì nâng cấp Pro tháng (99k) qua /upgrade.\n\n` +
+                    `Gõ /plan để xem ngày hết hạn. Chúc trade may mắn! 🚀`
+                ).catch(err => console.error(`Trial DM failed for ${result.userId}:`, err));
+            } else if (result.status === 'trial_reused') {
+                await bot.api.sendMessage(
+                    result.userId,
+                    `⚠️ Bạn đã từng dùng gói Trial 7 ngày rồi nên giao dịch ${result.amount.toLocaleString('vi-VN')}đ vừa rồi không được tính làm trial mới.\n\n` +
+                    `Admin sẽ liên hệ hoàn lại tiền. Nếu muốn tiếp tục dùng Pro, gõ /upgrade và chọn Pro tháng (99k).`
+                ).catch(err => console.error(`Trial reuse DM failed for ${result.userId}:`, err));
+                await notifyAdmins(
+                    bot,
+                    `⚠️ SePay: user ${result.userId} chuyển ${result.amount.toLocaleString('vi-VN')}đ với mã TRI nhưng đã dùng trial trước đó (tx ${result.txId}).\n` +
+                    `→ Cần hoàn tiền thủ công qua app ngân hàng.`
+                );
             } else if (result.status === 'unmatched') {
                 await notifyAdmins(
                     bot,
