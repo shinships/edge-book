@@ -195,6 +195,7 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
    - `Alert: <ticker> volume 2x` / `rsi > 70` / `ma cross` — technical EOD alerts via VNDirect bars (volume vs 20-day avg, Wilder RSI(14), MA20×MA50 golden/death)
    - `Alert: <ticker> insider` — fires when a NEW insider/related-person filing appears (tracks `lastSeen` published-ms marker in `params`)
    - `Insider: <ticker>` — list recent insider/related-person registered transactions (đăng ký mua/bán + quan hệ)
+   - `TA: <ticker>` — TA card: 1 thẻ gộp giá+%, RSI(14), vị trí giá vs MA20/50/200, volume vs TB20, hỗ trợ/kháng cự (đỉnh/đáy 20 phiên), tín hiệu P&F, streak khối ngoại/tự doanh. Tái dùng 100% chỉ báo có sẵn (`sma`/`computeRSI`/`pnfService`/`flowStreak`), không gọi thêm nguồn dữ liệu mới
    - `PnF: <ticker> [box] [r<n>]` — Point & Figure chart rendered as a PNG (X/O grid) + buy/sell state + vertical-count price target
    - `Screener: <criteria> [wl]` / `Screen:` / `Scan:` / `Lọc:` — quét VN30 (hoặc `wl` = watchlist) theo 1 tiêu chí: `oversold`/`overbought`/`rsi<25`, `volume 2`, `golden`/`death`, `pnf buy`/`pnf sell`, `foreign buy`/`tudoanh buy`. Empty → in-chat menu
    - 💰 **Smart-Money Digest** tự gửi 15:30 mỗi phiên: xếp hạng khối ngoại + tự doanh ròng trên các mã user theo dõi
@@ -258,6 +259,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 | VN Alerts (foreign/tự doanh/volume/RSI/MA/insider) | ❌ | ✅ | ✅ |
 | Smart-Money Digest (15:30) | ❌ | ✅ | ✅ |
 | Insider lookup (`Insider:`) | ❌ | ✅ | ✅ |
+| TA card (`TA:`) | ❌ | ✅ | ✅ |
 | Point & Figure (`PnF:`) | ❌ | ✅ | ✅ |
 | Screener (VN30 scan) | ❌ | ✅ | ✅ |
 | Portfolio (danh mục) | ❌ | ✅ | ✅ |
