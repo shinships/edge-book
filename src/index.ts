@@ -2451,18 +2451,35 @@ bot.on('message:photo', async (ctx) => {
             const fileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${file.file_path}`;
 
             try {
+                let cleanCaption = caption;
+                if (hasSaveKeyword) {
+                    cleanCaption = caption.replace(/^save:?\s*/i, '').trim();
+                } else if (isForward && caption) {
+                    cleanCaption = caption;
+                } else if (isForward) {
+                    cleanCaption = ``;
+                }
+
+                // Ưu tiên OAuth doc của user (SA không truy cập được doc drive.file);
+                // chưa connect → SA / active doc; mất quyền → nhắc reconnect.
+                const oauthImage = await oauthService.insertImageForUser(userId, fileUrl, cleanCaption);
                 const targetDocId = await userService.getActiveDocId(userId) || config.googleDocId;
 
-                if (targetDocId) {
-                    let cleanCaption = caption;
-                    if (hasSaveKeyword) {
-                        cleanCaption = caption.replace(/^save:?\s*/i, '').trim();
-                    } else if (isForward && caption) {
-                        cleanCaption = caption;
-                    } else if (isForward) {
-                        cleanCaption = ``;
+                if (oauthImage === 'ok') {
+                    if (cleanCaption) {
+                        const forwardFrom = getForwardSource(ctx.message);
+                        await researchService.addItem(userId, `[Image] ${cleanCaption}`, forwardFrom);
+                        await maybeRewardReferral(userId);
                     }
-
+                    await planService.incrementForwardCount(userId);
+                    try {
+                        await ctx.api.setMessageReaction(ctx.chat.id, ctx.message.message_id, [{ type: 'emoji', emoji: '❤' }]);
+                    } catch (e) {
+                        await ctx.reply('✅ Đã lưu ảnh vào Google Doc của bạn.');
+                    }
+                } else if (oauthImage === 'revoked') {
+                    await ctx.reply('⚠️ Mất quyền ghi Google Docs (có thể bạn đã gỡ quyền). Gõ Connect Docs để kết nối lại.');
+                } else if (targetDocId) {
                     await googleService.insertImageToDocs(targetDocId, fileUrl, cleanCaption);
 
                     if (cleanCaption) {
@@ -2478,7 +2495,7 @@ bot.on('message:photo', async (ctx) => {
                         await ctx.reply(`✅ Saved image to Google Docs (${targetDocId.substring(0, 10)}...).`);
                     }
                 } else {
-                    await ctx.reply('⚠️ Google Doc ID not configured.');
+                    await ctx.reply('⚠️ Chưa kết nối Google Docs. Gõ Connect Docs để lưu ảnh vào Doc riêng.');
                 }
             } catch (docError) {
                 console.error('Docs Insert Error:', docError);

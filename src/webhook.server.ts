@@ -18,6 +18,40 @@ function oauthResultPage(ok: boolean, message: string): string {
         `</body></html>`;
 }
 
+// Simple static privacy policy page — required by Google OAuth verification
+// (Branding tab → Privacy Policy link). Plain HTML, no templating dependency.
+const PRIVACY_POLICY_HTML = `<!doctype html><html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EdgeBook — Chính sách quyền riêng tư</title></head>
+<body style="font-family:system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 20px;line-height:1.6;color:#1f2937">
+<h1>EdgeBook — Chính sách quyền riêng tư</h1>
+<p><strong>Cập nhật lần cuối:</strong> 2026-06-29</p>
+
+<p>EdgeBook là một Telegram bot hỗ trợ nghiên cứu &amp; quản lý giao dịch cá nhân. Trang này mô tả dữ liệu chúng tôi thu thập và cách sử dụng.</p>
+
+<h2>1. Dữ liệu thu thập</h2>
+<ul>
+<li>Telegram user ID, username, tên hiển thị (do bạn cung cấp qua Telegram)</li>
+<li>Nội dung bạn forward/gõ vào bot (tin tức, ghi chú nghiên cứu, lệnh giao dịch)</li>
+<li>Nếu bạn chọn kết nối Google (tính năng "Connect Docs"): access/refresh token OAuth (Google), được mã hoá AES-256-GCM khi lưu, và địa chỉ email Google của bạn</li>
+</ul>
+
+<h2>2. Quyền Google OAuth (drive.file)</h2>
+<p>Khi bạn kết nối Google Docs, EdgeBook chỉ yêu cầu scope <code>drive.file</code> — phạm vi hẹp nhất của Google Drive API. Với scope này, bot <strong>chỉ có thể truy cập các file do chính bot tạo ra</strong> (1 Google Doc mới trong Drive của bạn để lưu research). Bot <strong>không thể</strong> xem, sửa, hoặc xoá bất kỳ file nào khác đã có sẵn trong Drive của bạn.</p>
+
+<h2>3. Mục đích sử dụng</h2>
+<p>Dữ liệu được dùng duy nhất để vận hành các tính năng của bot cho chính bạn: lưu trữ research, nhật ký giao dịch, nhắc lịch, tạo digest/báo cáo. Chúng tôi không bán, không chia sẻ dữ liệu cá nhân cho bên thứ ba.</p>
+
+<h2>4. Lưu trữ &amp; xoá dữ liệu</h2>
+<p>Dữ liệu được lưu trên cơ sở dữ liệu PostgreSQL (Supabase). Bạn có thể gõ <strong>Disconnect Docs</strong> trong Telegram để ngắt kết nối Google bất kỳ lúc nào — refresh token liên quan sẽ bị xoá khỏi hệ thống ngay lập tức. Muốn xoá toàn bộ dữ liệu tài khoản, liên hệ email ở mục 6.</p>
+
+<h2>5. Bên thứ ba</h2>
+<p>EdgeBook gọi các API: Telegram Bot API, Google APIs (Docs/Drive/Calendar — chỉ khi bạn chủ động kết nối), và một AI model provider để trả lời chat. Các bên này xử lý dữ liệu theo chính sách riêng của họ, chỉ trong phạm vi cần thiết để vận hành tính năng tương ứng.</p>
+
+<h2>6. Liên hệ</h2>
+<p>Câu hỏi về quyền riêng tư hoặc yêu cầu xoá dữ liệu, liên hệ: <a href="mailto:shincapitals@gmail.com">shincapitals@gmail.com</a></p>
+</body></html>`;
+
 // Báo cho admin (ADMIN_USER_IDS) khi có giao dịch SePay vào tài khoản nhưng
 // không tự nâng cấp được (sai nội dung CK, hoặc chuyển thiếu tiền) — tránh
 // trường hợp user chuyển khoản mà hệ thống im lặng, không ai biết để xử lý tay.
@@ -56,6 +90,10 @@ export function startWebhookServer(sepayService: SepayService, bot: Bot, oauthSe
 
     app.get('/health', (_req, res) => {
         res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    });
+
+    app.get('/privacy', (_req, res) => {
+        res.type('html').send(PRIVACY_POLICY_HTML);
     });
 
     // Google OAuth redirect — exchanges the code, stores the encrypted refresh token,

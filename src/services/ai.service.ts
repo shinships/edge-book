@@ -35,7 +35,7 @@ export class AIService {
             ? `\nGhi chú về người dùng:\n- ${profile.notes.join('\n- ')}`
             : '';
 
-        return `Bạn là trợ lý nghiên cứu giao dịch của ${name} — gọi là "S" (viết tắt của Shin Assistant).${job}
+        return `Bạn là trợ lý nghiên cứu giao dịch của ${name} — tên là "Edge Book".${job}
 ${notes}
 
 PHẠM VI HỖ TRỢ (QUAN TRỌNG):

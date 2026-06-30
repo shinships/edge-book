@@ -152,47 +152,87 @@ export class GoogleService {
     }
 
     async insertImageToDocs(docId: string, imageUrl: string, caption?: string) {
+        const captionReq = {
+            insertText: { text: caption ? `\n${caption}\n` : '\n', endOfSegmentLocation: { segmentId: '' } },
+        };
+
+        // Fast path: let Google fetch the original URL.
         try {
-            const requests: any[] = [
-                {
-                    insertInlineImage: {
-                        uri: imageUrl,
-                        endOfSegmentLocation: { segmentId: '' }, // Append to end of body
-                        objectSize: {
-                            height: { magnitude: 300, unit: 'PT' }, // Resize to reasonable height
-                            width: { magnitude: 400, unit: 'PT' }
-                        }
-                    }
-                }
-            ];
-
-            if (caption) {
-                requests.push({
-                    insertText: {
-                        text: `\n${caption}\n`,
-                        endOfSegmentLocation: { segmentId: '' },
-                    }
-                });
-            } else {
-                requests.push({
-                    insertText: {
-                        text: '\n',
-                        endOfSegmentLocation: { segmentId: '' },
-                    }
-                });
-            }
-
             await this.docs.documents.batchUpdate({
                 documentId: docId,
-                requestBody: { requests },
+                requestBody: { requests: [inlineImageRequest(imageUrl), captionReq] },
             });
             return true;
         } catch (error: any) {
-            console.error('Docs Image Insert Error:', error);
-            if (error.response) {
-                console.error('Docs Error Details:', JSON.stringify(error.response.data, null, 2));
-            }
+            const detail = error?.response?.data?.error?.message || error?.message || String(error);
+            console.warn('Docs Image Insert (direct) failed, retrying via Drive re-host:', detail);
+        }
+
+        // Fallback: Google's importer often can't retrieve the Telegram CDN URL.
+        // Download the bytes, host them in Drive (public-readable), insert, then clean up.
+        let fileId: string | null = null;
+        try {
+            fileId = await this.uploadTempImage(imageUrl);
+            if (!fileId) throw new Error('temp upload failed');
+            const hosted = `https://drive.google.com/uc?export=download&id=${fileId}`;
+            await this.docs.documents.batchUpdate({
+                documentId: docId,
+                requestBody: { requests: [inlineImageRequest(hosted), captionReq] },
+            });
+            return true;
+        } catch (error: any) {
+            const detail = error?.response?.data?.error?.message || error?.message || String(error);
+            console.error('Docs Image Insert Error:', detail);
             throw new GoogleApiError('Failed to insert image to Google Doc', error?.code);
+        } finally {
+            // Inline image bytes are copied into the doc on success — temp file is disposable.
+            if (fileId) {
+                this.drive.files.delete({ fileId }).catch(() => {});
+            }
         }
     }
+
+    // Download imageUrl and store it in Drive as a public-readable temp file so the
+    // Docs importer can fetch it. Returns the Drive file id, or null on failure.
+    private async uploadTempImage(imageUrl: string): Promise<string | null> {
+        try {
+            const resp = await fetch(imageUrl);
+            if (!resp.ok) {
+                console.error('uploadTempImage: download failed', resp.status);
+                return null;
+            }
+            const buf = Buffer.from(await resp.arrayBuffer());
+            const body = new Readable();
+            body.push(buf);
+            body.push(null);
+            const requestBody: any = { name: `edgebook-img-${Date.now()}.jpg` };
+            if (config.googleDriveFolderId) requestBody.parents = [config.googleDriveFolderId];
+            const created = await this.drive.files.create({
+                requestBody,
+                media: { mimeType: 'image/jpeg', body },
+                fields: 'id',
+            });
+            const id = created.data.id;
+            if (!id) return null;
+            await this.drive.permissions.create({ fileId: id, requestBody: { type: 'anyone', role: 'reader' } });
+            return id;
+        } catch (err: any) {
+            console.error('uploadTempImage error:', err?.message || err);
+            return null;
+        }
+    }
+}
+
+// Shared Docs request that appends an inline image at the end of the body.
+function inlineImageRequest(uri: string) {
+    return {
+        insertInlineImage: {
+            uri,
+            endOfSegmentLocation: { segmentId: '' },
+            objectSize: {
+                height: { magnitude: 300, unit: 'PT' },
+                width: { magnitude: 400, unit: 'PT' },
+            },
+        },
+    };
 }

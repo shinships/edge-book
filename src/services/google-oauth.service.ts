@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import * as crypto from 'crypto';
+import { Readable } from 'stream';
 import { db } from '../db';
 import { googleOauthTokens } from '../db/schema';
 import { eq } from 'drizzle-orm';
@@ -252,40 +253,121 @@ export class GoogleOAuthService {
     // Append text to the user's research doc. Returns a status so the caller can
     // fall back to the SA flow ('not_connected') or prompt a reconnect ('revoked').
     async appendForUser(userId: number, text: string): Promise<AppendResult> {
+        const ctx = await this.userDocClient(userId);
+        if (ctx === 'not_connected' || ctx === 'error') return ctx;
+        const res = await this.runBatch(ctx.client, ctx.docId, [{
+            insertText: { text: text + '\n', endOfSegmentLocation: { segmentId: '' } },
+        }], 'append');
+        if (res === 'revoked') await this.disconnect(userId);
+        return res;
+    }
+
+    // Insert an inline image into the user's research doc, optionally followed by a
+    // caption. First lets Google fetch imageUrl directly (cheap); if that fails
+    // (Google's image importer frequently can't retrieve the Telegram CDN URL), it
+    // downloads the bytes and re-hosts them in the user's Drive, inserts from there,
+    // then deletes the temp file. Same fallback semantics as appendForUser.
+    async insertImageForUser(userId: number, imageUrl: string, caption?: string): Promise<AppendResult> {
+        const ctx = await this.userDocClient(userId);
+        if (ctx === 'not_connected' || ctx === 'error') return ctx;
+        const { client, docId } = ctx;
+        const captionReq = {
+            insertText: { text: caption ? `\n${caption}\n` : '\n', endOfSegmentLocation: { segmentId: '' } },
+        };
+
+        // Fast path: let Google fetch the original URL.
+        let res = await this.runBatch(client, docId, [imageRequest(imageUrl), captionReq], 'image');
+        if (res === 'ok') return 'ok';
+        if (res === 'revoked') { await this.disconnect(userId); return 'revoked'; }
+
+        // Fallback: re-host the bytes in the user's Drive and insert from there.
+        const fileId = await this.uploadTempImage(client, imageUrl);
+        if (!fileId) return 'error';
+        const hosted = `https://drive.google.com/uc?export=download&id=${fileId}`;
+        res = await this.runBatch(client, docId, [imageRequest(hosted), captionReq], 'image-hosted');
+        // Inline image bytes are copied into the doc on success — temp file is disposable.
+        this.deleteDriveFile(client, fileId).catch(() => {});
+        if (res === 'revoked') { await this.disconnect(userId); return 'revoked'; }
+        return res;
+    }
+
+    // Resolve the user's active OAuth doc + an authed client, or a failure status.
+    private async userDocClient(userId: number): Promise<{ client: any; docId: string } | 'not_connected' | 'error'> {
         if (!oauthEnabled) return 'not_connected';
         const [row] = await db.select().from(googleOauthTokens).where(eq(googleOauthTokens.userId, userId));
         if (!row || !row.docId) return 'not_connected';
-
         let refreshToken: string;
         try {
             refreshToken = this.decrypt(row.refreshTokenEnc);
         } catch {
             return 'error';
         }
-
         const client = this.newClient();
         client.setCredentials({ refresh_token: refreshToken });
-        const docs = google.docs({ version: 'v1', auth: client });
+        return { client, docId: row.docId };
+    }
 
+    // Run a Docs batchUpdate with an already-authed client. Surfaces Google's detailed
+    // error reason in logs. Returns 'revoked' on auth loss (caller disconnects).
+    private async runBatch(client: any, docId: string, requests: any[], op: string): Promise<AppendResult> {
+        const docs = google.docs({ version: 'v1', auth: client });
         try {
-            await docs.documents.batchUpdate({
-                documentId: row.docId,
-                requestBody: {
-                    requests: [{
-                        insertText: { text: text + '\n', endOfSegmentLocation: { segmentId: '' } },
-                    }],
-                },
-            });
+            await docs.documents.batchUpdate({ documentId: docId, requestBody: { requests } });
             return 'ok';
         } catch (err: any) {
-            // invalid_grant → user revoked access or token expired permanently.
-            const msg = String(err?.message || '') + String(err?.response?.data?.error || '');
-            if (msg.includes('invalid_grant') || err?.code === 401) {
-                await this.disconnect(userId);
-                return 'revoked';
-            }
-            console.error('OAuth append error:', err?.message || err);
+            const detail = err?.response?.data?.error?.message || err?.message || String(err);
+            const blob = String(detail) + String(err?.response?.data?.error || '');
+            if (blob.includes('invalid_grant') || err?.code === 401) return 'revoked';
+            console.error(`OAuth ${op} error:`, detail);
             return 'error';
         }
     }
+
+    // Download imageUrl and store it in the user's Drive as a public-readable temp
+    // file (so Google's importer can fetch it). Returns the Drive file id, or null.
+    private async uploadTempImage(client: any, imageUrl: string): Promise<string | null> {
+        try {
+            const resp = await fetch(imageUrl);
+            if (!resp.ok) {
+                console.error('uploadTempImage: download failed', resp.status);
+                return null;
+            }
+            const buf = Buffer.from(await resp.arrayBuffer());
+            const drive = google.drive({ version: 'v3', auth: client });
+            const body = new Readable();
+            body.push(buf);
+            body.push(null);
+            const created = await drive.files.create({
+                requestBody: { name: `edgebook-img-${Date.now()}.jpg` },
+                media: { mimeType: 'image/jpeg', body },
+                fields: 'id',
+            });
+            const id = created.data.id;
+            if (!id) return null;
+            await drive.permissions.create({ fileId: id, requestBody: { type: 'anyone', role: 'reader' } });
+            return id;
+        } catch (err: any) {
+            console.error('uploadTempImage error:', err?.message || err);
+            return null;
+        }
+    }
+
+    private async deleteDriveFile(client: any, fileId: string): Promise<void> {
+        const drive = google.drive({ version: 'v3', auth: client });
+        await drive.files.delete({ fileId });
+    }
+}
+
+// Shared Docs request that appends an inline image at the end of the body.
+function imageRequest(uri: string) {
+    return {
+        insertInlineImage: {
+            uri,
+            endOfSegmentLocation: { segmentId: '' },
+            objectSize: {
+                height: { magnitude: 300, unit: 'PT' },
+                width: { magnitude: 400, unit: 'PT' },
+            },
+        },
+    };
 }
