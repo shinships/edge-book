@@ -585,6 +585,7 @@ bot.command('help', (ctx) => {
         '• Alert VN cuối phiên: HPG foreign buy 50 3p · HPG tudoanh buy · volume 2x · rsi > 70 · ma cross\n' +
         '   (50 = ròng ≥50 tỷ · 3p = ≥3 phiên liên tiếp · lặp mỗi phiên)\n' +
         '• 💰 Digest dòng tiền lớn tự gửi 15:30 mỗi phiên (NN + tự doanh mã bạn theo dõi)\n' +
+        '• 📊 TA: HPG — thẻ phân tích kỹ thuật gộp (RSI, MA20/50/200, volume, hỗ trợ/kháng cự, P&F, dòng tiền)\n' +
         '• 📐 PnF: HPG — đồ thị Point & Figure (X/O) + tín hiệu mua/bán, giá mục tiêu\n' +
         '• 👔 Insider: HPG — giao dịch nội bộ + người liên quan · Alert: HPG insider (báo ĐK mới)\n' +
         '• 🔍 Screener: oversold / golden / pnf buy / foreign buy — quét VN30 (thêm wl: chỉ watchlist)\n' +
@@ -1753,6 +1754,98 @@ bot.on('message:text', async (ctx) => {
                 `👔 Giao dịch nội bộ ${ticker} (mới nhất)\n\n${body}\n\n` +
                 `Đặt cảnh báo khi có đăng ký mới: Alert: ${ticker} insider`
             );
+            return;
+        }
+    }
+
+    // TA card (Pro) — 1 thẻ gộp chỉ báo kỹ thuật, tái dùng 100% logic có sẵn (RSI/MA/volume/
+    // P&F/streak NN-tự doanh), không cần nguồn dữ liệu mới. Cổ phiếu VN only.
+    {
+        const tam = text.match(/^(?:ta|ta card|phân ?tích ?kỹ ?thuật|phan ?tich ?ky ?thuat)\s*:?\s*([a-z0-9]{2,7})\s*$/i);
+        if (tam) {
+            const limits = await planService.getLimits(userId);
+            if (limits.maxActiveAlerts === 0) {
+                await ctx.reply('🔒 TA card là tính năng Pro. Gõ /upgrade để mở khoá!');
+                return;
+            }
+            const rawTicker = tam[1];
+            if (!isValidTicker(rawTicker)) {
+                await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: TA: HPG`);
+                return;
+            }
+            const ticker = rawTicker.toUpperCase();
+            if (marketRouter.classify(ticker) !== 'vn') {
+                await ctx.reply('⚠️ TA card hiện hỗ trợ cổ phiếu VN (vd HPG, FPT, SSI).');
+                return;
+            }
+            const bars = await vnStockService.getDailyBars(ticker, 260);
+            if (bars.length < 25) {
+                await ctx.reply(`⚠️ Chưa đủ dữ liệu để phân tích ${ticker}.`);
+                return;
+            }
+            const closes = bars.map((b) => b.c);
+            const last = bars[bars.length - 1];
+            const prev = bars[bars.length - 2];
+            const changePercent = prev && prev.c > 0 ? ((last.c - prev.c) / prev.c) * 100 : 0;
+
+            const rsi = computeRSI(closes, 14);
+            const ma20 = sma(closes, 20);
+            const ma50 = sma(closes, 50);
+            const ma200 = sma(closes, 200);
+            const vol20 = sma(bars.slice(-21, -1).map((b) => b.v), 20);
+            const volMult = vol20 !== null && vol20 > 0 ? last.v / vol20 : null;
+
+            // Hỗ trợ/kháng cự thô: đỉnh/đáy 20 phiên gần nhất, không tính hôm nay.
+            const lookback = bars.slice(-21, -1);
+            const resistance = lookback.length > 0 ? Math.max(...lookback.map((b) => b.h)) : null;
+            const support = lookback.length > 0 ? Math.min(...lookback.map((b) => b.l)) : null;
+
+            const pnf = pnfService.compute(bars.map((b) => ({ h: b.h, l: b.l, c: b.c })));
+
+            const [foreignDays, propDays] = await Promise.all([
+                cafefService.getForeignSeries(ticker, 5),
+                cafefService.getProprietarySeries(ticker, 5),
+            ]);
+            const fBuy = flowStreak(foreignDays, 'buy');
+            const fSell = flowStreak(foreignDays, 'sell');
+            const pBuy = flowStreak(propDays, 'buy');
+            const pSell = flowStreak(propDays, 'sell');
+
+            const emo = changePercent >= 0 ? '🟢' : '🔴';
+            const lines: string[] = [
+                `📊 ${ticker} · TA card`,
+                `${emo} ${formatPriceMkt(last.c, 'vn')} (${fmtPct(Math.round(changePercent * 10) / 10)})`,
+                '',
+                rsi !== null
+                    ? `RSI(14): ${rsi.toFixed(0)}${rsi >= 70 ? ' (quá mua)' : rsi <= 30 ? ' (quá bán)' : ''}`
+                    : 'RSI(14): n/a',
+            ];
+
+            const maParts: string[] = [];
+            if (ma20 !== null) maParts.push(`MA20 ${last.c >= ma20 ? '↑' : '↓'} ${formatPriceMkt(ma20, 'vn')}`);
+            if (ma50 !== null) maParts.push(`MA50 ${last.c >= ma50 ? '↑' : '↓'} ${formatPriceMkt(ma50, 'vn')}`);
+            if (ma200 !== null) maParts.push(`MA200 ${last.c >= ma200 ? '↑' : '↓'} ${formatPriceMkt(ma200, 'vn')}`);
+            lines.push(maParts.length > 0 ? `Giá vs MA: ${maParts.join(' · ')}` : 'MA: chưa đủ dữ liệu (cần thêm phiên)');
+
+            lines.push(volMult !== null ? `Volume: ${volMult.toFixed(1)}x TB20` : 'Volume: n/a');
+
+            if (support !== null && resistance !== null) {
+                lines.push(`Hỗ trợ/Kháng cự (20 phiên): ${formatPriceMkt(support, 'vn')} / ${formatPriceMkt(resistance, 'vn')}`);
+            }
+
+            if (pnf) {
+                const sigTxt = pnf.signal === 'buy' ? '🟢 MUA (double-top)' : pnf.signal === 'sell' ? '🔴 BÁN (double-bottom)' : '➖ chưa rõ';
+                lines.push(`P&F: ${sigTxt}`);
+            }
+
+            const flowParts: string[] = [];
+            if (fBuy > 0) flowParts.push(`NN mua ròng ${fBuy} phiên`);
+            else if (fSell > 0) flowParts.push(`NN bán ròng ${fSell} phiên`);
+            if (pBuy > 0) flowParts.push(`Tự doanh mua ròng ${pBuy} phiên`);
+            else if (pSell > 0) flowParts.push(`Tự doanh bán ròng ${pSell} phiên`);
+            if (flowParts.length > 0) lines.push(`Dòng tiền: ${flowParts.join(' · ')}`);
+
+            await ctx.reply(lines.join('\n'));
             return;
         }
     }
