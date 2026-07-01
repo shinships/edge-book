@@ -9,6 +9,10 @@
 //   private IP (10.x) and so can't be used for proprietary data from outside the VPC.
 
 const BASE = 'https://cafef.vn/du-lieu/ajax/pagenew/datahistory';
+// Dividend/capital-increase calendar — same host, sibling path. Newest-first; INCLUDES
+// forward-dated (announced-but-not-yet-reached) events, confirmed by spike (SAB had a
+// 2026-07-27 entry while "today" was 2026-07-01) — so it can power lead-time reminders.
+const EVENTS_URL = 'https://cafef.vn/du-lieu/Ajax/PageNew/LichSuKien.ashx';
 const TTL_MS = 5 * 60_000; // EOD data changes at most once/day; modest refresh
 const TIMEOUT_MS = 8_000;
 const UA = 'Mozilla/5.0 (compatible; EdgeBookBot/1.0)';
@@ -18,6 +22,12 @@ export interface FlowDay {
     netValue: number;   // VND, positive = net buy
     buyValue: number;
     sellValue: number;
+}
+
+export interface DividendEvent {
+    date: string;                          // 'yyyy-mm-dd' (VN local)
+    dateKind: 'exRights' | 'issuance';     // exRights = ngày GDKHQ (cổ tức/thưởng); issuance = ngày phát hành (vd ESOP)
+    text: string;                          // joined description, e.g. "Cổ tức bằng Tiền, tỷ lệ 10%"
 }
 
 export interface InsiderTx {
@@ -58,10 +68,16 @@ interface InsiderCacheEntry {
     at: number;
 }
 
+interface EventsCacheEntry {
+    value: DividendEvent[] | null;
+    at: number;
+}
+
 export class CafefService {
     private propCache = new Map<string, CacheEntry>();
     private foreignCache = new Map<string, CacheEntry>();
     private insiderCache = new Map<string, InsiderCacheEntry>();
+    private eventsCache = new Map<string, EventsCacheEntry>();
 
     private norm(t: string): string {
         return t.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -180,6 +196,33 @@ export class CafefService {
             }
         }
         this.insiderCache.set(symbol, { value: out.length ? out : null, at: Date.now() });
+        return out.slice(0, size);
+    }
+
+    /**
+     * Dividend / capital-increase calendar (GDKHQ ex-rights date for cash/stock dividends,
+     * issuance date for ESOP/private placements), newest-first — includes forward-dated
+     * (already-announced) entries. CafeF `LichSuKien.ashx`. Returns [] on failure (never throws).
+     */
+    async getDividendEvents(ticker: string, size = 10): Promise<DividendEvent[]> {
+        const symbol = this.norm(ticker);
+        const cached = this.eventsCache.get(symbol);
+        if (this.fresh(cached)) return cached.value ? cached.value.slice(0, size) : [];
+
+        const url = `${EVENTS_URL}?Symbol=${symbol}`;
+        const data = await this.fetchJson(url);
+        const rows: any[] = data?.Data ?? [];
+
+        const out: DividendEvent[] = [];
+        if (Array.isArray(rows)) {
+            for (const r of rows) {
+                const date = vnDate(msDate(r.Time));
+                const texts: string[] = Array.isArray(r.Text) ? r.Text : [];
+                if (!date || texts.length === 0) continue;
+                out.push({ date, dateKind: Number(r.type) === 2 ? 'issuance' : 'exRights', text: texts.join('; ') });
+            }
+        }
+        this.eventsCache.set(symbol, { value: out.length ? out : null, at: Date.now() });
         return out.slice(0, size);
     }
 }

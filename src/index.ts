@@ -131,6 +131,12 @@ function formatInsiderTx(t: InsiderTx): string {
     return `${pub}${who}\n   ${act} ${fmtShares(t.planVolume)}${win}${real}`;
 }
 
+// 'yyyy-mm-dd' in VN local time (UTC+7), offset by `offsetDays` — used for corporate-event
+// lead-time reminders (compares against CafefService.getDividendEvents' 'yyyy-mm-dd' dates).
+function vnDateStr(offsetDays = 0): string {
+    return new Date(Date.now() + 7 * 3_600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10);
+}
+
 // Compact a raw VND amount to a tỷ/triệu string (foreign flow, portfolio NAV/P&L).
 function fmtVnd(value: number): string {
     const abs = Math.abs(value);
@@ -622,6 +628,7 @@ bot.command('help', (ctx) => {
         '• 📊 TA: HPG — thẻ phân tích kỹ thuật gộp (RSI, MA20/50/200, volume, hỗ trợ/kháng cự, P&F, dòng tiền)\n' +
         '• 📐 PnF: HPG — đồ thị Point & Figure (X/O) + tín hiệu mua/bán, giá mục tiêu\n' +
         '• 👔 Insider: HPG — giao dịch nội bộ + người liên quan · Alert: HPG insider (báo ĐK mới)\n' +
+        '• 📅 Events: HPG — lịch cổ tức & tăng vốn (GDKHQ/ngày phát hành) · bot tự nhắc trước 3 ngày cho mã bạn theo dõi\n' +
         '• 🔍 Screener: oversold / golden / pnf buy / foreign buy — quét VN30 (thêm wl: chỉ watchlist)\n' +
         '\n' +
         '📊 Danh mục (Pro)\n' +
@@ -1800,6 +1807,42 @@ bot.on('message:text', async (ctx) => {
                 `👔 Giao dịch nội bộ ${ticker} (mới nhất)\n\n${body}\n\n` +
                 `Đặt cảnh báo khi có đăng ký mới: Alert: ${ticker} insider`
             );
+            return;
+        }
+    }
+
+    // Corporate events (Pro) — lịch cổ tức & tăng vốn (GDKHQ/ngày phát hành), CafeF. VN only.
+    {
+        const em = text.match(/^(?:events?|sự ?kiện|su ?kien|sk)\s*:?\s*([a-z0-9]{2,7})\s*$/i);
+        if (em) {
+            const limits = await planService.getLimits(userId);
+            if (limits.maxActiveAlerts === 0) {
+                await ctx.reply('🔒 Lịch sự kiện là tính năng Pro. Gõ /upgrade để mở khoá!');
+                return;
+            }
+            const rawTicker = em[1];
+            if (!isValidTicker(rawTicker)) {
+                await ctx.reply(`⚠️ Ticker "${rawTicker}" không hợp lệ. Ví dụ: Events: HPG`);
+                return;
+            }
+            const ticker = rawTicker.toUpperCase();
+            if (marketRouter.classify(ticker) !== 'vn') {
+                await ctx.reply('⚠️ Lịch sự kiện hiện hỗ trợ cổ phiếu VN (vd HPG, FPT, SSI).');
+                return;
+            }
+            const events = await cafefService.getDividendEvents(ticker, 8);
+            if (events.length === 0) {
+                await ctx.reply(`📅 ${ticker}: chưa có dữ liệu cổ tức/tăng vốn gần đây (hoặc nguồn tạm gián đoạn).`);
+                return;
+            }
+            const today = vnDateStr();
+            const upcoming = events.filter((e) => e.date >= today);
+            const past = events.filter((e) => e.date < today);
+            const line = (e: typeof events[number]) => `${e.date} · ${e.dateKind === 'issuance' ? 'Ngày phát hành' : 'GDKHQ'}: ${e.text}`;
+            let body = '';
+            if (upcoming.length > 0) body += `🔔 Sắp tới:\n${upcoming.map(line).join('\n')}\n\n`;
+            if (past.length > 0) body += `Gần đây:\n${past.map(line).join('\n')}`;
+            await ctx.reply(`📅 Lịch cổ tức & tăng vốn ${ticker}\n\n${body.trimEnd()}`);
             return;
         }
     }
@@ -3183,6 +3226,49 @@ cron.schedule('0 16 * * *', async () => {
         portfolioDigestCronBusy = false;
     }
     console.log('[PortfolioDigest] EOD portfolio digest cron completed.');
+}, {
+    timezone: 'Asia/Ho_Chi_Minh',
+});
+
+// --- CORPORATE EVENTS REMINDER CRON (08:10 ICT daily — GDKHQ/phát hành lead-time nudge) ---
+// Fires exactly when an event's date is `today + EVENT_LEAD_DAYS` — a single, dedupe-free
+// nudge (the next day it no longer matches, so it never repeats), same pattern as the
+// portfolio TP/SL check firing once. CafefService.getDividendEvents includes forward-dated
+// (already-announced) entries, confirmed by spike (SAB showed a 26-day-out cash dividend).
+const EVENT_LEAD_DAYS = 3;
+let eventsCronBusy = false;
+cron.schedule('10 8 * * *', async () => {
+    if (eventsCronBusy) return;
+    eventsCronBusy = true;
+    console.log('[Events] Running corporate events reminder cron...');
+    try {
+        const targetDate = vnDateStr(EVENT_LEAD_DAYS);
+        const users = await planService.getDigestEligibleUsers();
+        for (const userId of users) {
+            try {
+                if (!(await planService.getLimits(userId)).maxActiveAlerts) continue;
+                const tickers = (await trackedVnTickers(userId)).slice(0, 30);
+                for (const ticker of tickers) {
+                    const events = await cafefService.getDividendEvents(ticker, 5);
+                    const hit = events.find((e) => e.date === targetDate);
+                    if (!hit) continue;
+                    const label = hit.dateKind === 'issuance' ? 'Ngày phát hành' : 'GDKHQ';
+                    await bot.api.sendMessage(
+                        userId,
+                        `🔔 ${ticker} ${label} sau ${EVENT_LEAD_DAYS} ngày (${hit.date}): ${hit.text}`
+                    );
+                    await new Promise((r) => setTimeout(r, 150)); // Telegram rate-limit cushion
+                }
+            } catch (e) {
+                console.error(`[Events] Error for user ${userId}:`, e);
+            }
+        }
+    } catch (e) {
+        console.error('[Events] cron error:', e);
+    } finally {
+        eventsCronBusy = false;
+    }
+    console.log('[Events] Corporate events reminder cron completed.');
 }, {
     timezone: 'Asia/Ho_Chi_Minh',
 });
