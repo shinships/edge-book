@@ -2169,7 +2169,7 @@ bot.on('message:text', async (ctx) => {
         } catch { /* ignore */ }
         await ctx.reply(
             `🔔 Đã đặt alert ${ticker} ${condition === 'above' ? '>' : '<'} ${formatPriceMkt(target, marketRouter.classify(ticker))}.\n` +
-            `Bot check giá mỗi phút và báo khi chạm.${extra}`
+            `Bot check giá mỗi 5 phút và báo khi chạm.${extra}`
         );
         return;
     }
@@ -2402,7 +2402,7 @@ bot.on('message:text', async (ctx) => {
     }
 
     // Position TP: HPG 30 / Position SL: HPG 24 — set or clear (off) a position's
-    // take-profit/stop-loss; checked every minute against live price (Pro+)
+    // take-profit/stop-loss; checked every 5 min against live price (Pro+)
     const posTargetMatch = text.match(/^position\s+(tp|sl)\s*:\s*(\S+)\s+(off|\d+(?:\.\d+)?k?)\s*$/i);
     if (posTargetMatch) {
         if (!await planService.canUse(userId, 'canPortfolio')) {
@@ -2768,9 +2768,9 @@ cron.schedule('0 18 * * 0', async () => {
     timezone: 'Asia/Ho_Chi_Minh',
 });
 
-// --- PRICE ALERT CHECKER CRON (every minute) ---
+// --- PRICE ALERT CHECKER CRON (every 5 minutes) ---
 let alertCronBusy = false;
-cron.schedule('* * * * *', async () => {
+cron.schedule('*/5 * * * *', async () => {
     if (alertCronBusy) return; // skip if a previous run is still in flight
     alertCronBusy = true;
     try {
@@ -2810,11 +2810,11 @@ cron.schedule('* * * * *', async () => {
     timezone: 'Asia/Ho_Chi_Minh',
 });
 
-// --- PORTFOLIO TP/SL CHECKER CRON (every minute) ---
+// --- PORTFOLIO TP/SL CHECKER CRON (every 5 minutes) ---
 // Checks every position with a take-profit/stop-loss set against a live price;
-// fires once, then clears that field so it doesn't repeat every minute.
+// fires once, then clears that field so it doesn't repeat every 5 minutes.
 let portfolioTargetCronBusy = false;
-cron.schedule('* * * * *', async () => {
+cron.schedule('*/5 * * * *', async () => {
     if (portfolioTargetCronBusy) return;
     portfolioTargetCronBusy = true;
     try {

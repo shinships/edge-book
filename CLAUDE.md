@@ -205,7 +205,7 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
    - `Buy: <ticker> <qty> @ <price>` / `Sell: <ticker> <qty> @ <price>` — average-in / reduce a position (weighted-avg cost, realized PnL booked on sell)
    - `Portfolio` / `Danh mục` — live valuation of every position (NAV, unrealized PnL/%, weight) grouped by market (VN thousand-VND vs crypto USD not summed together)
    - `Position: <ticker>` — single-position detail (qty, avg cost, live PnL, TP/SL if set)
-   - `Position TP: <ticker> <price>` / `Position SL: <ticker> <price>` (or `off` to clear) — set a take-profit/stop-loss target per position; checked every minute against live price, fires once then auto-clears
+   - `Position TP: <ticker> <price>` / `Position SL: <ticker> <price>` (or `off` to clear) — set a take-profit/stop-loss target per position; checked every 5 minutes against live price, fires once then auto-clears
    - 📊 **Portfolio Digest** tự gửi 16:00 mỗi ngày: NAV + lãi/lỗ cho user có vị thế
 8. **Discipline & Psychology commands** (Sprint 9, Pro — đi cùng `canTrade`):
    - **15s safety gate** (mặc định BẬT): `Trade:` không mở lệnh ngay — bot stash params vào `pendingTrades` Map (in-memory) và gửi checklist 3 câu (callback `dchk:<i>`) + nút Vào lệnh (`dgo`, chỉ pass khi tick đủ 3 + đã qua 15s; TTL 10 phút) + Huỷ (`dcancel`)
@@ -287,9 +287,9 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 
 **Weekly Report** — a `node-cron` job runs at **18:00 every Sunday (Asia/Ho_Chi_Minh)** that, for each digest-eligible (Pro/Premium) user with research in the last 7 days, builds `getWeeklyReportData()` and sends an AI report (`AIService.generateWeeklyReport()`) highlighting per-ticker sentiment shift vs the previous week.
 
-**Price Alert Checker** — a `node-cron` job runs **every minute** (`* * * * *`): loads all active alerts (`AlertService.getAllActive()`), batch-fetches prices via `MarketService.getPrices()`, marks hit alerts as triggered, and DMs the owner. Guarded by an in-flight flag (`alertCronBusy`) so overlapping runs are skipped. Only `price`-type alerts are evaluated here; the non-`price` VN alerts are skipped and handled by the EOD cron below.
+**Price Alert Checker** — a `node-cron` job runs **every 5 minutes** (`*/5 * * * *`): loads all active alerts (`AlertService.getAllActive()`), batch-fetches prices via `MarketService.getPrices()`, marks hit alerts as triggered, and DMs the owner. Guarded by an in-flight flag (`alertCronBusy`) so overlapping runs are skipped. Only `price`-type alerts are evaluated here; the non-`price` VN alerts are skipped and handled by the EOD cron below.
 
-**Portfolio TP/SL Checker** — a `node-cron` job runs **every minute** (`* * * * *`): loads every position with a take-profit and/or stop-loss set (`PortfolioService.getAllWithTargets()`), batch-fetches prices via `MarketRouter.getPrices()`, and DMs the owner when a target is hit. The hit field is cleared (`setTarget(..., null)`) **before** sending so a send failure can't cause it to re-fire every minute. Guarded by `portfolioTargetCronBusy`.
+**Portfolio TP/SL Checker** — a `node-cron` job runs **every 5 minutes** (`*/5 * * * *`): loads every position with a take-profit and/or stop-loss set (`PortfolioService.getAllWithTargets()`), batch-fetches prices via `MarketRouter.getPrices()`, and DMs the owner when a target is hit. The hit field is cleared (`setTarget(..., null)`) **before** sending so a send failure can't cause it to re-fire every 5 minutes. Guarded by `portfolioTargetCronBusy`.
 
 **VN EOD Alert Checker** — a `node-cron` job runs at **15:15 ICT, weekdays** (`15 15 * * 1-5`, after HOSE/HNX close): evaluates every non-`price` active alert via `evaluateEodAlert()` (foreign/proprietary streak+threshold via CafeF, volume/RSI/MA-cross via VNDirect bars, insider new-filing detection), DMs the owner on a hit. One-shot alerts are marked triggered before sending; **recurring** money-flow alerts (`params.recurring === true`) stay active and re-evaluate each session. Guarded by `vnAlertCronBusy`.
 
