@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { portfolioPositions } from '../db/schema';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, or, isNotNull } from 'drizzle-orm';
 
 // --- Interfaces ---
 
@@ -14,6 +14,8 @@ export interface Position {
     avgCost: number;       // native price unit (VN: thousand VND, crypto: USD)
     market: PositionMarket;
     realizedPnl: number;   // cumulative booked profit, money units (qty * price)
+    takeProfit?: number;   // native price unit; alert fires once, then cleared
+    stopLoss?: number;     // native price unit; alert fires once, then cleared
     createdAt: string;
     updatedAt: string;
 }
@@ -58,6 +60,8 @@ function toPosition(row: PositionRow): Position {
         avgCost: row.avgCost,
         market: row.market as PositionMarket,
         realizedPnl: row.realizedPnl,
+        takeProfit: row.takeProfit ?? undefined,
+        stopLoss: row.stopLoss ?? undefined,
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
     };
@@ -88,6 +92,36 @@ export class PortfolioService {
             .from(portfolioPositions)
             .where(and(eq(portfolioPositions.userId, userId), eq(portfolioPositions.ticker, ticker.toUpperCase())));
         return row ? toPosition(row) : undefined;
+    }
+
+    // Distinct user ids that hold at least one position (for the EOD digest cron).
+    async getAllUserIds(): Promise<number[]> {
+        const rows = await db.selectDistinct({ userId: portfolioPositions.userId }).from(portfolioPositions);
+        return rows.map((r) => r.userId);
+    }
+
+    // Every position with a take-profit and/or stop-loss set (for the TP/SL check cron).
+    async getAllWithTargets(): Promise<Position[]> {
+        const rows = await db.select()
+            .from(portfolioPositions)
+            .where(or(isNotNull(portfolioPositions.takeProfit), isNotNull(portfolioPositions.stopLoss)));
+        return rows.map(toPosition);
+    }
+
+    /** Set (or clear with `value = null`) a position's take-profit/stop-loss. */
+    async setTarget(
+        userId: number,
+        ticker: string,
+        kind: 'tp' | 'sl',
+        value: number | null
+    ): Promise<Position | null> {
+        const existing = await this.getPosition(userId, ticker);
+        if (!existing) return null;
+        const [row] = await db.update(portfolioPositions)
+            .set(kind === 'tp' ? { takeProfit: value, updatedAt: new Date() } : { stopLoss: value, updatedAt: new Date() })
+            .where(eq(portfolioPositions.id, existing.id))
+            .returning();
+        return row ? toPosition(row) : null;
     }
 
     /** Buy / average-in. Weighted-average cost; creates the position if new. */

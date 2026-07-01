@@ -67,7 +67,7 @@ edge-book/
 │   │   ├── pnf.service.ts      # Point & Figure computation (columns, box/reversal, double-top/bottom signal, vertical-count target) — pure, no DB/network
 │   │   ├── pnf-image.ts        # Renders a PnfResult → PNG via @napi-rs/canvas (font-free: X/O as vectors, 7-segment price axis)
 │   │   ├── plan.service.ts     # Subscription tier tracking & feature gating
-│   │   ├── portfolio.service.ts # Portfolio position ledger: buy/avg-in, sell+realized PnL, live valuation (Pro+)
+│   │   ├── portfolio.service.ts # Portfolio position ledger: buy/avg-in, sell+realized PnL, live valuation, per-position TP/SL targets (Pro+)
 │   │   ├── report.service.ts   # PDF trade report generation via pdfkit (Premium export)
 │   │   ├── research.service.ts # Research items: auto-tagging, search, star, digest data
 │   │   ├── sepay.service.ts    # SePay VietQR bank-transfer: QR generation, webhook auth/parse, upgrade logic (Sprint 10)
@@ -199,15 +199,21 @@ All logic is in `bot.on('message:text')` and `bot.on('message:photo')` handlers 
    - `PnF: <ticker> [box] [r<n>]` — Point & Figure chart rendered as a PNG (X/O grid) + buy/sell state + vertical-count price target
    - `Screener: <criteria> [wl]` / `Screen:` / `Scan:` / `Lọc:` — quét VN30 (hoặc `wl` = watchlist) theo 1 tiêu chí: `oversold`/`overbought`/`rsi<25`, `volume 2`, `golden`/`death`, `pnf buy`/`pnf sell`, `foreign buy`/`tudoanh buy`. Empty → in-chat menu
    - 💰 **Smart-Money Digest** tự gửi 15:30 mỗi phiên: xếp hạng khối ngoại + tự doanh ròng trên các mã user theo dõi
-7. **Discipline & Psychology commands** (Sprint 9, Pro — đi cùng `canTrade`):
+7. **Portfolio (danh mục) commands** (Pro, `canPortfolio`):
+   - `Buy: <ticker> <qty> @ <price>` / `Sell: <ticker> <qty> @ <price>` — average-in / reduce a position (weighted-avg cost, realized PnL booked on sell)
+   - `Portfolio` / `Danh mục` — live valuation of every position (NAV, unrealized PnL/%, weight) grouped by market (VN thousand-VND vs crypto USD not summed together)
+   - `Position: <ticker>` — single-position detail (qty, avg cost, live PnL, TP/SL if set)
+   - `Position TP: <ticker> <price>` / `Position SL: <ticker> <price>` (or `off` to clear) — set a take-profit/stop-loss target per position; checked every minute against live price, fires once then auto-clears
+   - 📊 **Portfolio Digest** tự gửi 16:00 mỗi ngày: NAV + lãi/lỗ cho user có vị thế
+8. **Discipline & Psychology commands** (Sprint 9, Pro — đi cùng `canTrade`):
    - **15s safety gate** (mặc định BẬT): `Trade:` không mở lệnh ngay — bot stash params vào `pendingTrades` Map (in-memory) và gửi checklist 3 câu (callback `dchk:<i>`) + nút Vào lệnh (`dgo`, chỉ pass khi tick đủ 3 + đã qua 15s; TTL 10 phút) + Huỷ (`dcancel`)
    - `Trade:` nhận thêm token `emo <1-10>` (emotion score) và `hr <bpm>` (heart rate); thiếu `emo` → bot gửi keyboard 1-10 sau khi mở lệnh (callback `emo:<tradeId>:<n>` / `emoskip:`); `emo ≥ 8` hoặc `hr ≥ 110` → cảnh báo cortisol/adrenaline, khuyên rời màn hình
    - `Close:` lệnh lỗ → streak +1, nhắc giảm 50% risk (tính sẵn con số từ `riskPercent`/`positionSize`); đủ `dailyLossLimit` lệnh thua/ngày (mặc định 3) → khoá `Trade:` tới hết ngày VN; đồng thời hỏi "có tuân thủ kế hoạch không?" (callback `audit:<tradeId>:<1|0>`) → phản hồi vị tha nếu Có, không phán xét nếu Không
    - `Discipline` (status) / `Discipline On` / `Discipline Off` · `Limit: <1-10>` (giới hạn thua/ngày) · `Review`/`Audit` (đối soát chủ động các lệnh đóng hôm nay)
-8. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
-9. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
-10. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc. For Premium users, also runs `ThesisService.findConflicts()` and sends a conflict alert if the new item contradicts an active thesis.
-11. **Default**: Falls through to AI chat with per-user session
+9. **Calendar**: Messages containing "schedule", "meeting", or "remind" → AI extracts event data → Calendar API
+10. **Personalization**: `Call me <name>`, `My name is <name>`, `My job is <job>`, `Remember: <note>`
+11. **Save to Docs + Research**: `Save: <content>` command OR forwarded messages → auto-tags tickers, classifies category, scores sentiment, saves to Research DB + appends to active Google Doc. For Premium users, also runs `ThesisService.findConflicts()` and sends a conflict alert if the new item contradicts an active thesis.
+12. **Default**: Falls through to AI chat with per-user session
 
 ### Photo Handler
 
@@ -230,6 +236,7 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 - **AlertService** *(Sprint 8, extended)*: Persists to Postgres (`alerts`). Alert CRUD — `addAlert` (above/below + target + `alertType` + `params` jsonb), `getActiveAlerts`, `getAllActive` (for the cron), `deleteAlert`, `markTriggered`, and `setParams` (overwrite `params` without flipping status — used by recurring insider alerts to advance their `lastSeen` filing marker). `AlertType` = `price | foreign | proprietary | volume | rsi | macross | insider`. Gated by `PlanLimits.maxActiveAlerts`.
 - **CafefService** *(new)*: **No DB** — VN money-flow + insider data from CafeF public ajax (`cafef.vn/du-lieu/ajax/pagenew/datahistory/*.ashx`, no key). `getForeignSeries`/`getProprietarySeries` (per-session net buy/sell history, newest-first → enables streak + threshold), `getInsiderTransactions` (đăng ký giao dịch nội bộ + người liên quan). Exported `flowStreak(days, side)` counts consecutive same-sign sessions. 5-min cache, 8s timeout, best-effort, never throws. Must hit the canonical `cafef.vn` host (the `s.cafef.vn` alias 301-drops the query); finfo-api is avoided because it resolves to a private IP.
 - **PnfService / pnf-image** *(new)*: `PnfService.compute(bars, opts?)` builds Point & Figure columns (High/Low method, default box by price, 3-box reversal), detects double-top/bottom `signal`, and estimates a vertical-count `priceTarget` — pure, no DB/network, with a box-size guard (accepts a user box only if the resulting span is 3–500 boxes, else auto). `renderPnfImage(result, ticker)` rasterises the last columns to a PNG via `@napi-rs/canvas`, **font-free** (X = diagonal strokes, O = ring, price axis = 7-segment digits) because the Railway container has no registered font. Pro-gated via `maxActiveAlerts > 0`.
+- **PortfolioService**: Persists to Postgres (`portfolio_positions`, unique index user+ticker). Real position ledger (distinct from `trades`, the entry/exit journal) — `buy`/`sell` weighted-average the cost and book realized PnL, `valuate(userId, prices)` grosses up live NAV/unrealized-PnL/weight per position and per market (VN vs crypto summed separately, since they're different currencies). `setTarget(userId, ticker, 'tp'|'sl', value)` sets/clears a per-position take-profit/stop-loss (`getAllWithTargets()` feeds the every-minute check cron, which fires once then clears the hit field); `getAllUserIds()` feeds the EOD digest cron. Gated by `PlanLimits.canPortfolio`.
 - **WatchlistService** *(new, Sprint 8)*: Persists to Postgres (`watchlist_items`, unique index user+ticker). `add` (onConflictDoNothing → 'added'|'exists'), `remove`, `getWatchlist`. Gated by `PlanLimits.maxWatchlist`.
 - **MarketService** *(new, Sprint 8)*: **No DB** — live crypto prices from Binance public REST API (no key). `getPrices()` (batch, used by per-minute alert cron) and `get24hStats()` (Watchlist). Maps ticker → `<BASE>USDT` symbol, 45s in-memory cache with negative-caching, 8s timeout, batch endpoint with per-symbol fallback. Best-effort: never throws, returns partial/empty maps on failure.
 - **DisciplineService** *(new, Sprint 9)*: Persists to Postgres (`discipline_state`, 1 row/user, auto-created with defaults: enabled, limit 3). Tracks loss streak (`recordLoss`/`recordWin`), daily loss counter (VN-timezone date string, lazy reset on read), `dailyLossLimit`, and `cooldownUntil` (set to end of VN day when the limit is hit). The 15s safety gate itself is in-memory in `index.ts` (`pendingTrades` Map), not in this service. Trade journal psychology fields (`emotionScore`, `heartRate`, `disciplined`) live on `trades` and are managed by `TradeService.setEmotion`/`setDisciplined`; `getStats()` exposes `disciplinedPnl` (PnL minus undisciplined "lucky" wins), `disciplineRate`, and `getAnalytics()` adds `byEmotion` (calm ≤5 vs stressed ≥7, requires ≥3 scored trades).
@@ -280,9 +287,13 @@ Reacts with ❤ emoji on success (falls back to text reply if reactions aren't s
 
 **Price Alert Checker** — a `node-cron` job runs **every minute** (`* * * * *`): loads all active alerts (`AlertService.getAllActive()`), batch-fetches prices via `MarketService.getPrices()`, marks hit alerts as triggered, and DMs the owner. Guarded by an in-flight flag (`alertCronBusy`) so overlapping runs are skipped. Only `price`-type alerts are evaluated here; the non-`price` VN alerts are skipped and handled by the EOD cron below.
 
+**Portfolio TP/SL Checker** — a `node-cron` job runs **every minute** (`* * * * *`): loads every position with a take-profit and/or stop-loss set (`PortfolioService.getAllWithTargets()`), batch-fetches prices via `MarketRouter.getPrices()`, and DMs the owner when a target is hit. The hit field is cleared (`setTarget(..., null)`) **before** sending so a send failure can't cause it to re-fire every minute. Guarded by `portfolioTargetCronBusy`.
+
 **VN EOD Alert Checker** — a `node-cron` job runs at **15:15 ICT, weekdays** (`15 15 * * 1-5`, after HOSE/HNX close): evaluates every non-`price` active alert via `evaluateEodAlert()` (foreign/proprietary streak+threshold via CafeF, volume/RSI/MA-cross via VNDirect bars, insider new-filing detection), DMs the owner on a hit. One-shot alerts are marked triggered before sending; **recurring** money-flow alerts (`params.recurring === true`) stay active and re-evaluate each session. Guarded by `vnAlertCronBusy`.
 
 **Smart-Money Digest** — a `node-cron` job runs at **15:30 ICT, weekdays** (`30 15 * * 1-5`): for each digest-eligible (Pro+) user, ranks the latest-session foreign + proprietary net flow across the VN tickers they track (watchlist ∪ portfolio ∪ alerts, `trackedVnTickers()`) and DMs the top movers (`buildSmartMoneyDigest()`). Guarded by `smartMoneyCronBusy`.
+
+**EOD Portfolio Digest** — a `node-cron` job runs at **16:00 ICT, daily** (`0 16 * * *`): for each digest-eligible (Pro+) user who holds at least one position (`PortfolioService.getAllUserIds()`), valuates the portfolio against live prices and DMs the NAV + unrealized/realized PnL per market. Guarded by `portfolioDigestCronBusy`.
 
 **EOD Process Audit** — a `node-cron` job runs at **21:00 daily (Asia/Ho_Chi_Minh)**: for each user with trades (`TradeService.getAllUserIds()`) who is Pro+ and has discipline mode enabled, sends up to 5 unaudited trades closed today (`getUnauditedClosedToday()`) with ✅/❌ process-audit buttons (callback `audit:<tradeId>:<1|0>`) — the "perfect trader" ledger.
 

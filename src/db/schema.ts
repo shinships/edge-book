@@ -120,6 +120,8 @@ export const portfolioPositions = pgTable('portfolio_positions', {
     avgCost: real('avg_cost').notNull(),
     market: text('market').notNull(),                          // 'vn' | 'crypto'
     realizedPnl: real('realized_pnl').notNull().default(0),    // money units (qty * price)
+    takeProfit: real('take_profit'),                            // native price unit; cleared once hit
+    stopLoss: real('stop_loss'),                                // native price unit; cleared once hit
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
 }, (t) => [uniqueIndex('portfolio_user_ticker_idx').on(t.userId, t.ticker)]);

@@ -19,7 +19,7 @@ import { renderPnfImage } from './services/pnf-image';
 import { MarketRouter } from './services/market-router';
 import { AlertService, AlertType, AlertItem } from './services/alert.service';
 import { WatchlistService } from './services/watchlist.service';
-import { PortfolioService } from './services/portfolio.service';
+import { PortfolioService, PortfolioValuation } from './services/portfolio.service';
 import { DisciplineService } from './services/discipline.service';
 import { GrowthService } from './services/growth.service';
 import { ReferralService } from './services/referral.service';
@@ -144,6 +144,40 @@ function fmtVnd(value: number): string {
 function fmtMoney(value: number, market: 'crypto' | 'vn'): string {
     if (market === 'vn') return `${fmtVnd(value * 1000)}đ`;
     return `$${formatPrice(value)}`;
+}
+
+// Per-position lines for a portfolio valuation — shared by the `Portfolio` command and the EOD digest cron.
+function renderPortfolioLines(val: PortfolioValuation): string[] {
+    return val.positions.map((p) => {
+        const head = `${p.ticker}: ${p.quantity} @ ${formatPriceMkt(p.avgCost, p.market)}`;
+        const targets = (p.takeProfit !== undefined || p.stopLoss !== undefined)
+            ? ` · ${p.takeProfit !== undefined ? `🎯${formatPriceMkt(p.takeProfit, p.market)}` : ''}${p.stopLoss !== undefined ? ` 🛑${formatPriceMkt(p.stopLoss, p.market)}` : ''}`
+            : '';
+        if (p.marketValue === undefined) return `⚪ ${head} → giá n/a${targets}`;
+        const e = (p.unrealizedPnl ?? 0) >= 0 ? '🟢' : '🔴';
+        const sign = (p.unrealizedPnl ?? 0) >= 0 ? '+' : '';
+        return `${e} ${head} → ${formatPriceMkt(p.price!, p.market)} ` +
+            `(${sign}${p.unrealizedPct}%, ${sign}${fmtMoney(p.unrealizedPnl!, p.market)})` +
+            (p.weight !== undefined ? ` · ${p.weight}%` : '') + targets;
+    });
+}
+
+// Per-market NAV/PnL summary lines — shared by the `Portfolio` command and the EOD digest cron.
+function renderPortfolioTotals(val: PortfolioValuation): string[] {
+    const totalLines: string[] = [];
+    for (const mk of ['vn', 'crypto'] as const) {
+        const t = val.byMarket[mk];
+        if (!t) continue;
+        const label = mk === 'vn' ? '🇻🇳 Cổ phiếu VN' : '🪙 Crypto';
+        const sign = t.unrealizedPnl >= 0 ? '+' : '';
+        const pct = t.cost > 0 ? Math.round((t.unrealizedPnl / t.cost) * 1000) / 10 : 0;
+        totalLines.push(
+            `${label}: NAV ${fmtMoney(t.marketValue, mk)}${t.priced ? '' : ' (một phần n/a)'} · ` +
+            `Lãi/lỗ ${sign}${fmtMoney(t.unrealizedPnl, mk)} (${sign}${pct}%)` +
+            (t.realizedPnl !== 0 ? ` · Đã chốt ${t.realizedPnl >= 0 ? '+' : ''}${fmtMoney(t.realizedPnl, mk)}` : '')
+        );
+    }
+    return totalLines;
 }
 
 // Short human label for an alert (price alerts show the price; VN alerts their condition).
@@ -593,6 +627,8 @@ bot.command('help', (ctx) => {
         '📊 Danh mục (Pro)\n' +
         '• Buy: HPG 1000 @ 25.5 (b:) · Sell: HPG 500 @ 28 (s:)\n' +
         '• Portfolio (pf) · Position: HPG\n' +
+        '• Position TP: HPG 30 · Position SL: HPG 24 · off để bỏ — bot báo khi giá chạm mốc\n' +
+        '• 📊 Digest danh mục tự gửi 16:00 mỗi ngày (NAV + lãi/lỗ)\n' +
         '\n' +
         '💳 Tài khoản\n' +
         '• /plan · /upgrade · /invite (mời bạn, cả hai +7 ngày Pro)\n' +
@@ -2271,30 +2307,8 @@ bot.on('message:text', async (ctx) => {
         await ctx.replyWithChatAction('typing');
         const prices = await marketRouter.getPrices(positions.map((p) => p.ticker));
         const val = await portfolioService.valuate(userId, prices);
-
-        const lines = val.positions.map((p) => {
-            const head = `${p.ticker}: ${p.quantity} @ ${formatPriceMkt(p.avgCost, p.market)}`;
-            if (p.marketValue === undefined) return `⚪ ${head} → giá n/a`;
-            const e = (p.unrealizedPnl ?? 0) >= 0 ? '🟢' : '🔴';
-            const sign = (p.unrealizedPnl ?? 0) >= 0 ? '+' : '';
-            return `${e} ${head} → ${formatPriceMkt(p.price!, p.market)} ` +
-                `(${sign}${p.unrealizedPct}%, ${sign}${fmtMoney(p.unrealizedPnl!, p.market)})` +
-                (p.weight !== undefined ? ` · ${p.weight}%` : '');
-        });
-
-        const totalLines: string[] = [];
-        for (const mk of ['vn', 'crypto'] as const) {
-            const t = val.byMarket[mk];
-            if (!t) continue;
-            const label = mk === 'vn' ? '🇻🇳 Cổ phiếu VN' : '🪙 Crypto';
-            const sign = t.unrealizedPnl >= 0 ? '+' : '';
-            const pct = t.cost > 0 ? Math.round((t.unrealizedPnl / t.cost) * 1000) / 10 : 0;
-            totalLines.push(
-                `${label}: NAV ${fmtMoney(t.marketValue, mk)}${t.priced ? '' : ' (một phần n/a)'} · ` +
-                `Lãi/lỗ ${sign}${fmtMoney(t.unrealizedPnl, mk)} (${sign}${pct}%)` +
-                (t.realizedPnl !== 0 ? ` · Đã chốt ${t.realizedPnl >= 0 ? '+' : ''}${fmtMoney(t.realizedPnl, mk)}` : '')
-            );
-        }
+        const lines = renderPortfolioLines(val);
+        const totalLines = renderPortfolioTotals(val);
 
         await ctx.reply(`📊 Danh mục\n${lines.join('\n')}\n\n${totalLines.join('\n')}`);
         return;
@@ -2332,9 +2346,48 @@ bot.on('message:text', async (ctx) => {
             body += `Giá hiện tại: n/a\n`;
         }
         if (pos.realizedPnl !== 0) {
-            body += `Đã chốt lãi/lỗ: ${pos.realizedPnl >= 0 ? '+' : ''}${fmtMoney(pos.realizedPnl, pos.market)}`;
+            body += `Đã chốt lãi/lỗ: ${pos.realizedPnl >= 0 ? '+' : ''}${fmtMoney(pos.realizedPnl, pos.market)}\n`;
+        }
+        if (pos.takeProfit !== undefined || pos.stopLoss !== undefined) {
+            body += `${pos.takeProfit !== undefined ? `🎯 TP: ${formatPriceMkt(pos.takeProfit, pos.market)} ` : ''}` +
+                `${pos.stopLoss !== undefined ? `🛑 SL: ${formatPriceMkt(pos.stopLoss, pos.market)}` : ''}`;
+        } else {
+            body += `Chưa đặt TP/SL. Gõ: Position TP: ${ticker} <giá> · Position SL: ${ticker} <giá>`;
         }
         await ctx.reply(body.trimEnd());
+        return;
+    }
+
+    // Position TP: HPG 30 / Position SL: HPG 24 — set or clear (off) a position's
+    // take-profit/stop-loss; checked every minute against live price (Pro+)
+    const posTargetMatch = text.match(/^position\s+(tp|sl)\s*:\s*(\S+)\s+(off|\d+(?:\.\d+)?k?)\s*$/i);
+    if (posTargetMatch) {
+        if (!await planService.canUse(userId, 'canPortfolio')) {
+            await ctx.reply('🔒 Portfolio (danh mục) là tính năng Pro. Gõ /upgrade để nâng cấp!');
+            return;
+        }
+        const kind = posTargetMatch[1].toLowerCase() as 'tp' | 'sl';
+        const ticker = posTargetMatch[2].toUpperCase();
+        const existing = await portfolioService.getPosition(userId, ticker);
+        if (!existing) {
+            await ctx.reply(`⚠️ Bạn chưa có vị thế ${ticker}. Thêm: Buy: ${ticker} 1000 @ 25.5`);
+            return;
+        }
+        const clear = posTargetMatch[3].toLowerCase() === 'off';
+        const value = clear ? undefined : parsePrice(posTargetMatch[3]);
+        if (!clear && value === undefined) {
+            await ctx.reply('⚠️ Giá không hợp lệ. Ví dụ: Position TP: HPG 30 · Position SL: HPG off');
+            return;
+        }
+        const updated = await portfolioService.setTarget(userId, ticker, kind, clear ? null : value!);
+        if (!updated) {
+            await ctx.reply('⚠️ Không thể cập nhật. Vui lòng thử lại.');
+            return;
+        }
+        const label = kind === 'tp' ? '🎯 Take-profit' : '🛑 Stop-loss';
+        await ctx.reply(clear
+            ? `Đã bỏ ${label} cho ${ticker}.`
+            : `Đã đặt ${label} ${ticker}: ${formatPriceMkt(value!, existing.market)}. Bot sẽ báo khi giá chạm mốc.`);
         return;
     }
 
@@ -2714,6 +2767,55 @@ cron.schedule('* * * * *', async () => {
     timezone: 'Asia/Ho_Chi_Minh',
 });
 
+// --- PORTFOLIO TP/SL CHECKER CRON (every minute) ---
+// Checks every position with a take-profit/stop-loss set against a live price;
+// fires once, then clears that field so it doesn't repeat every minute.
+let portfolioTargetCronBusy = false;
+cron.schedule('* * * * *', async () => {
+    if (portfolioTargetCronBusy) return;
+    portfolioTargetCronBusy = true;
+    try {
+        const positions = await portfolioService.getAllWithTargets();
+        if (positions.length === 0) return;
+
+        const tickers = [...new Set(positions.map((p) => p.ticker))];
+        const prices = await marketRouter.getPrices(tickers);
+
+        for (const p of positions) {
+            const price = prices.get(p.ticker);
+            if (price === undefined) continue;
+            const hitTp = p.takeProfit !== undefined && price >= p.takeProfit;
+            const hitSl = p.stopLoss !== undefined && price <= p.stopLoss;
+            if (!hitTp && !hitSl) continue;
+
+            // Clear the hit field(s) BEFORE sending — a send failure must not re-fire forever.
+            if (hitTp) await portfolioService.setTarget(p.userId, p.ticker, 'tp', null);
+            if (hitSl) await portfolioService.setTarget(p.userId, p.ticker, 'sl', null);
+            try {
+                const lines: string[] = [];
+                if (hitTp) lines.push(`🎯 Đã chạm Take-profit ${formatPriceMkt(p.takeProfit!, p.market)}`);
+                if (hitSl) lines.push(`🛑 Đã chạm Stop-loss ${formatPriceMkt(p.stopLoss!, p.market)}`);
+                await bot.api.sendMessage(
+                    p.userId,
+                    `${lines.join('\n')}\n` +
+                    `Vị thế ${p.ticker}: ${p.quantity} @ giá vốn ${formatPriceMkt(p.avgCost, p.market)}\n` +
+                    `Giá hiện tại: ${formatPriceMkt(price, p.market)}\n` +
+                    `Gõ Sell: ${p.ticker} <số lượng> @ ${price} để chốt.`
+                );
+            } catch (e) {
+                console.error(`[PortfolioTargets] send failed for user ${p.userId}:`, e);
+            }
+            await new Promise((r) => setTimeout(r, 150)); // Telegram rate-limit cushion
+        }
+    } catch (e) {
+        console.error('[PortfolioTargets] cron error:', e);
+    } finally {
+        portfolioTargetCronBusy = false;
+    }
+}, {
+    timezone: 'Asia/Ho_Chi_Minh',
+});
+
 // --- VN STOCK EOD ALERT HELPERS + CRON ---
 
 // Simple moving average of the last `period` values; null if not enough data.
@@ -3042,6 +3144,45 @@ cron.schedule('30 15 * * 1-5', async () => {
     } finally {
         smartMoneyCronBusy = false;
     }
+}, {
+    timezone: 'Asia/Ho_Chi_Minh',
+});
+
+// --- EOD PORTFOLIO DIGEST CRON (16:00 ICT daily — NAV + PnL for holders) ---
+let portfolioDigestCronBusy = false;
+cron.schedule('0 16 * * *', async () => {
+    if (portfolioDigestCronBusy) return;
+    portfolioDigestCronBusy = true;
+    console.log('[PortfolioDigest] Running EOD portfolio digest cron...');
+    try {
+        const [digestEligible, holders] = await Promise.all([
+            planService.getDigestEligibleUsers(),
+            portfolioService.getAllUserIds(),
+        ]);
+        const eligibleSet = new Set(digestEligible);
+        const userIds = holders.filter((id) => eligibleSet.has(id));
+
+        for (const userId of userIds) {
+            try {
+                if (!await planService.canUse(userId, 'canPortfolio')) continue;
+                const positions = await portfolioService.getPositions(userId);
+                if (positions.length === 0) continue;
+                const prices = await marketRouter.getPrices(positions.map((p) => p.ticker));
+                const val = await portfolioService.valuate(userId, prices);
+                const lines = renderPortfolioLines(val);
+                const totalLines = renderPortfolioTotals(val);
+                await bot.api.sendMessage(userId, `📊 Digest danh mục cuối ngày\n${lines.join('\n')}\n\n${totalLines.join('\n')}`);
+                await new Promise((r) => setTimeout(r, 150)); // Telegram rate-limit cushion
+            } catch (e) {
+                console.error(`[PortfolioDigest] Error for user ${userId}:`, e);
+            }
+        }
+    } catch (e) {
+        console.error('[PortfolioDigest] cron error:', e);
+    } finally {
+        portfolioDigestCronBusy = false;
+    }
+    console.log('[PortfolioDigest] EOD portfolio digest cron completed.');
 }, {
     timezone: 'Asia/Ho_Chi_Minh',
 });
