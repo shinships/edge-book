@@ -699,8 +699,18 @@ const COLON_SHORTCUTS: Record<string, string> = {
     pos: 'Position',
 };
 const WORD_SHORTCUTS: Record<string, string> = { wl: 'Watchlist', pf: 'Portfolio' };
+// Slash aliases for no-arg action commands surfaced in the Telegram "/" menu.
+// Tapping a menu item sends the literal "/command"; map it back to the canonical
+// text so the existing matchers below fire unchanged.
+const SLASH_COMMANDS: Record<string, string> = {
+    '/watchlist': 'Watchlist', '/trades': 'Trades', '/portfolio': 'Portfolio',
+    '/alerts': 'Alerts', '/digest': 'Digest', '/recent': 'Recent',
+};
 function expandShortcut(raw: string): string {
     const t = raw.trim();
+    // "/watchlist" & friends from the "/" menu → canonical view command
+    const slash = SLASH_COMMANDS[t.toLowerCase()];
+    if (slash) return slash;
     // "+ việc" → quick add task
     const plus = t.match(/^\+\s*(.+)$/s);
     if (plus) return `Add Task: ${plus[1].trim()}`;
@@ -3355,7 +3365,13 @@ bot.callbackQuery(/^audit:([^:]+):(0|1)$/, async (ctx) => {
 // Slash commands shown in Telegram's command menu.
 const BOT_COMMANDS = [
     { command: 'start', description: '👋 Khởi động & giới thiệu EdgeBook' },
-    { command: 'help', description: '📓 Hướng dẫn sử dụng & danh sách lệnh' },
+    { command: 'help', description: '📓 Danh sách lệnh & gõ tắt' },
+    { command: 'watchlist', description: '📈 Giá watchlist · gõ tắt: wl' },
+    { command: 'trades', description: '📓 Sổ lệnh & PnL · mở lệnh: Trade: Long BTC entry 108k SL 105k TP 115k' },
+    { command: 'portfolio', description: '💼 Danh mục · gõ tắt: pf' },
+    { command: 'alerts', description: '🔔 Cảnh báo đang bật · đặt: Alert: BTC > 70k' },
+    { command: 'digest', description: '📊 Tổng hợp research hôm nay' },
+    { command: 'recent', description: '🕒 10 research mới nhất · gõ tắt: notes' },
     { command: 'plan', description: '💳 Xem gói hiện tại & giới hạn' },
     { command: 'upgrade', description: '⭐ Nâng cấp Pro / Premium' },
     { command: 'invite', description: '🔗 Mời bạn, cả hai nhận +7 ngày Pro' },
